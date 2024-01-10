@@ -23,19 +23,14 @@ class MixLlamaMLP(nn.Module):
         self.down_proj_ = down_proj
         self.gate_proj_ = gate_proj
         self.up_proj_ = up_proj
-        self.MixGemmCache = None
+        self.out_features = down_proj.out_features
+        self.MixGemmCache = MixLibCache(512,self.out_features)
         
-
-        self.down_proj_.SetSigma(1.0)
+        
  
     def forward(self, x):
-        if self.MixGemmCache is None:
-            if len(x.shape) == 3:
-                self.MixGemmCache = MixLibCache(x.shape[0] * x.shape[1])
-            else:
-                self.MixGemmCache = MixLibCache(x.shape[0])
-
  
+
         out_shape = x.shape[:-1] + (self.out_features,)
         x = x.reshape(-1, x.shape[-1])
 
