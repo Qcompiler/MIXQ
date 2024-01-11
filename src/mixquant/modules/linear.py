@@ -1,29 +1,11 @@
-import math
+ 
 import torch
 import torch.nn as nn
-import sys
-
+ 
 import mixlib
 
  
-def make_divisible(c, divisor):
-    return (c + divisor - 1) // divisor
-
-def calculate_zeros_width(in_features, group_size=128, pack_num=8):
-    if group_size >= 128:
-        size_multiplier = 1
-    elif group_size == 64:
-        size_multiplier = 2
-    elif group_size == 32:
-        size_multiplier = 4
-    else:
-        raise NotImplementedError
-    
-    base_width = make_divisible(in_features // group_size, pack_num)
-    base_width = make_divisible(base_width, size_multiplier) * size_multiplier
-    return base_width
-
-
+ 
 from EETQ import quant_weights, preprocess_weights, w8_a16_gemm
 
 
@@ -55,8 +37,8 @@ class MixLinear_GEMM(nn.Module):
 
     @torch.no_grad()
     def quant_weight(self,cache,layer=None,weight_only=False):
-
-
+        print("layer is ")
+        print(layer)
         self.K = self.weight.shape[1]
 
         self.N = self.weight.shape[0]
@@ -136,7 +118,8 @@ class MixLinear_GEMM(nn.Module):
     def ExtractFP16weight(self):
         assert self.ind is not None
         assert self.weight_cache is  None
-        self.weight_cache = self.q_weight[:,self.ind].to(torch.float16) *  self.scale_col.T
+        self.weight_cache = self.q_weight[:,self.ind].to(torch.float16)
+        self.weight_cache *=  self.scale_col.T
         self.q_weight[:,self.ind] *= 0
         return self.weight_cache
 
@@ -227,7 +210,7 @@ class MixLinear_GEMM(nn.Module):
                                                     self.q_weight, 
                                                     cache.x_scale,
                                                     self.scale_col,
-                                                    cache.zeros,
+                                                    self.cache.zeros,
                                                     M,self.N,self.K)    
         else:
             y1 = mixlib.int8FusedDequantize(cache.q_xcache, 
@@ -275,7 +258,7 @@ class MixLinear_GEMM(nn.Module):
                                                     self.q_weight, 
                                                     cache.x_scale,
                                                     self.scale_col,
-                                                    cache.zeros,
+                                                    self.cache.zeros,
                                                     M,self.N,self.K)    
         #print("after gemm",torch.cuda.memory_allocated()/1024/1024 - memory)
         return y1.reshape(cache.shape)
@@ -312,7 +295,7 @@ class MixLinear_GEMM(nn.Module):
                                                     self.q_weight, 
                                                     cache.x_scale,
                                                     self.scale_col,
-                                                    cache.zeros,
+                                                    self.cache.zeros,
                                                     M,self.N,self.K)    
 
 

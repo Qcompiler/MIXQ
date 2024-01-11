@@ -1,12 +1,25 @@
 
 
- 
-for batch in   512 
+CMD="srun -p twills -A h100 --gres=gpu:h100:1"
+
+set -x
+for batch in    512
     do
     for seq in   64  
         do
+
+            # llama 70 B
+            # CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 ${CMD} python evalppl.py \
+            # --fp_features_num 128 --model_type mix --model_path /home/dataset/llama-2/Llama-2-70b-hf  \
+            # --quant_file /home/dataset/llama-2/Llama-2-70b-hf --n_ctx $batch --n_batch $batch --eval_accuracy True
+            # CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 ${CMD} python evalppl.py \
+            # --fp_features_num 128 --model_type mix --model_path /home/dataset/llama-2/Llama-2-70b-hf  \
+            # --quant_file /home/dataset/llama-2/Llama-2-70b-hf --n_ctx $batch --n_batch $batch --eval_throughput True
+            
             for model in 7  
                 do
+
+                echo ${model}
                 # floaps awq
                 #CUDA_VISIBLE_DEVICES=$1 python   benchflops.py --model_path /mnt/data/zhongrx/Llama-2-${model}b-hf --quant_file /mnt/data/chenyd/Llama-2-${model}b-awq  --batch_size ${batch} --seq_length ${seq}  
                 # floaps mix
@@ -29,14 +42,21 @@ for batch in   512
                 #CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 python evalppl.py --model_type bitsandbytesfp16 --model_path /mnt/data/zhongrx/Llama-2-${model}b-hf  --n_ctx $batch --n_batch $batch
                 
                 #ppl mix
-                CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 python evalppl.py \
-                --fp_features_num 128 --model_type mix --model_path /mnt/data/zhongrx/Llama-2-${model}b-hf \
-                --quant_file /data/chenyidong/modeldata/Llama-2-${model}b-hf/checkpoint --n_ctx $batch --n_batch $batch
+
+
+                                
+                CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 ${CMD} \
+                python evalppl.py --fp_features_num 128 --model_type mix --model_path  \
+                /home/dataset/llama-2/Llama-2-${model}b-hf --quant_file  /home/dataset/llama-2/checkpoint/Llama-2-${model}b-hf \
+                --n_ctx $batch --n_batch $batch  --eval_accuracy True
+
+                # CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 ${CMD} \
+                # python evalppl.py --fp_features_num 128 --model_type mix --model_path  \
+                # /home/dataset/llama-2/Llama-2-${model}b-hf --quant_file  /home/dataset/llama-2/checkpoint/Llama-2-${model}b-hf \
+                # --n_ctx $batch --n_batch $batch  --eval_throughput True 
 
                 #CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 python  evalppl.py --fp_features_num 128 --model_type mix --model_path /data/chenyidong/llama/Baichuan2-${model}B-Base --quant_file /data/chenyidong/llama/Baichuan2-${model}B-Base --n_ctx $batch --n_batch $batch
 
-                # llama 70 B
-                #CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 python evalppl.py --fp_features_num 128 --model_type mix --model_path /home/dataset/llama-2/Llama-2-70b-hf  --quant_file /home/dataset/llama-2/Llama-2-70b-hf --n_ctx $batch --n_batch $batch
 
 
                 # ppl quik

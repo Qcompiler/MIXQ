@@ -123,9 +123,15 @@ if __name__ == "__main__":
     parser.add_argument('--int8_down_proj', action='store_true', help='Use INT8 for Down Projection')
     parser.add_argument('--fp_features_frac', type=float, default=None, help='Fraction of features to keep in FP16.')    
     parser.add_argument("--fp_features_num", type=int, default=1, help="outliers")
+
+    parser.add_argument('--eval_accuracy', type=bool, default=True)
+    parser.add_argument('--eval_throughput', type=bool, default=False)
+
+
     args = parser.parse_args()
     
-
+    if args.eval_throughput is True:
+        args.eval_accuracy = False
 
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -133,7 +139,7 @@ if __name__ == "__main__":
     if not tokenizer.pad_token_id:
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    Perplexity(None, tokenizer, args.dataset_path, args.dataset_name, args.split, args.text_column)
+ 
     model_path = args.model_path
     quant_file = args.quant_file
 
@@ -260,7 +266,7 @@ if __name__ == "__main__":
         llama_replace_with_kernels(model, args)    
         model = model.to('cuda')
     print(model)
-    ppl = Perplexity(model, tokenizer, args.dataset_path, args.dataset_name, args.split, args.text_column)
+    ppl = Perplexity(model, tokenizer, args.dataset_path, args.dataset_name, args.split, args.text_column, args.eval_accuracy)
     allppl = ppl.calculate_perplexity(args.n_ctx, args.n_batch)
 
     data = pd.DataFrame(allppl)

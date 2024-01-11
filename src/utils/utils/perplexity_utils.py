@@ -11,7 +11,8 @@ class Perplexity:
     A class for calculating the perplexity of a language model.
     """
 
-    def __init__(self, model, tokenizer, dataset_path='wikitext', dataset_name=None, split='test', text_column='text'):
+    def __init__(self, model, tokenizer, dataset_path='wikitext', dataset_name=None, split='test', text_column='text',
+                 eval_accuracy = True):
         """
         Calculate perplexity using the same method as seen in llama.cpp.
 
@@ -40,6 +41,9 @@ class Perplexity:
         self._split = split
         self._text_column = text_column
         self._text = self._prepare_data()
+        self.eval_accuracy = eval_accuracy
+
+ 
     
     def _get_device(self):
         if torch.backends.mps.is_available():
@@ -116,8 +120,12 @@ class Perplexity:
                 # Process each batch of tokens
                 nll, count = self._process_batch(i, n_ctx, n_batch, tokens, nll, count)
 
+ 
                 # Calculate and display the current perplexity
-                curr_ppl = np.exp(nll / count)
+                if self.eval_accuracy is True:
+                    curr_ppl = np.exp(nll / count)
+                else:
+                    curr_ppl = 0
                 all_perplexity.append(curr_ppl)
                 progress.set_description(f"Perplexity: {curr_ppl:.4f}")
                 #print("-----------------------")
@@ -182,17 +190,16 @@ class Perplexity:
         # Example, we have a context window of 512, we will compute perplexity for each of the
         # last 256 tokens.  Then, we split the input up into context window size chunks to
         # process the entire prompt.
-
-        for j in range(min(512, n_ctx // 2), n_ctx - 1):
-            tok_logits = logits[0][0][j]
-            # Compute the probability of the next token
-            prob = torch.softmax(tok_logits,dim=-1)[tokens[0][start + j + 1]]
-            prob = prob.to(torch.float16).cpu().numpy()
-            # Update the negative log likelihood and the count of processed tokens
-            nll += -np.log(prob, where=prob>0)
-            
-            count += 1
-
+        if self.eval_accuracy is True:
+            for j in range(min(512, n_ctx // 2), n_ctx - 1):
+                tok_logits = logits[0][0][j]
+                # Compute the probability of the next token
+                prob = torch.softmax(tok_logits,dim=-1)[tokens[0][start + j + 1]]
+                prob = prob.to(torch.float16).cpu().numpy()
+                # Update the negative log likelihood and the count of processed tokens
+                nll += -np.log(prob, where=prob>0)
+                count += 1
+        
         return nll, count
 
     def _compute_batch_logits(self, tokens, batch_start, batch_size):
