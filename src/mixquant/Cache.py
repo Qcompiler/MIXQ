@@ -7,7 +7,7 @@ class MixLibCache:
         self.device = 'cuda'
 
         self.sigma = torch.zeros((1,1),dtype=torch.float16).to('cuda')  
-        self.zeros = torch.zeros((512,3*12288),dtype=torch.float16).to('cuda')    
+        self.zeros = torch.zeros((512,12288),dtype=torch.float16).to('cuda')    
         self.sigma[0] = 6
         
         self.x_scale = None

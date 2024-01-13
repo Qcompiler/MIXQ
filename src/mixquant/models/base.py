@@ -275,9 +275,9 @@ class BaseForCausalLM(nn.Module):
  
             for name, module in named_linears.items():
 
-
-
-                q_linear =  MixLinear_GEMM(module.in_features, module.out_features,module.bias is not None,dev = next(layer.parameters()).device)
+                q_linear =  MixLinear_GEMM(module.in_features, module.out_features,
+                                           module.bias is not None,
+                                           dev = next(layer.parameters()).device)
  
                 set_op_by_name(layer, name, q_linear)
 

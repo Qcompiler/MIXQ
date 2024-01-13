@@ -37,8 +37,7 @@ class MixLinear_GEMM(nn.Module):
 
     @torch.no_grad()
     def quant_weight(self,cache,layer=None,weight_only=False):
-        print("layer is ")
-        print(layer)
+
         self.K = self.weight.shape[1]
 
         self.N = self.weight.shape[0]
@@ -274,13 +273,14 @@ class MixLinear_GEMM(nn.Module):
 
         if not self.forward_without_precondition_len == len(cache.ind):
             self.ind = cache.ind
-            self.weight_cache = self.q_weight[:,self.ind].to(torch.float16) *  self.scale_col.T
+            self.weight_cache = self.q_weight[:,self.ind].to(torch.float16) 
+            self.weight_cache *=  self.scale_col.T
             self.forward_without_precondition_len = len(self.ind)
             #print("after weight_cache",torch.cuda.memory_allocated()/1024/1024 - memory)
         if len(self.ind):
              
 
-            outliers_fp16 = torch.mm( cache.activation_outliers ,  self.weight_cache.T)
+            outliers_fp16 = torch.mm( cache.activation_outliers,  self.weight_cache.T)
         
             y1 = mixlib.int8FusedDequantizeSilu(cache.q_xcache, 
                                                     self.q_weight, 

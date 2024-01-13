@@ -1,3 +1,4 @@
+# this code is taken from GPTQ:
 import sys
 import torch
 import numpy as np
@@ -11,7 +12,8 @@ class Perplexity:
     A class for calculating the perplexity of a language model.
     """
 
-    def __init__(self, model, tokenizer, dataset_path='wikitext', dataset_name=None, split='test', text_column='text',
+    def __init__(self, model, tokenizer, dataset_path='wikitext', dataset_name=None,
+                 split='test', text_column='text',
                  eval_accuracy = True):
         """
         Calculate perplexity using the same method as seen in llama.cpp.

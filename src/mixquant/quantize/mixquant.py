@@ -5,11 +5,10 @@ import torch.nn as nn
 from tqdm import tqdm
 from typing import Dict, List
 from collections import defaultdict
-from awq.utils.utils import clear_memory
-from awq.utils.calib_data import get_calib_dataset
-from awq.quantize.scale import apply_scale, apply_clip
-from awq.modules.linear import MixLinear_GEMM
-from awq.utils.module import append_str_prefix, get_op_name, get_named_linears, set_op_by_name
+from mixquant.utils.utils import clear_memory
+from mixquant.utils.calib_data import get_calib_dataset
+from mixquant.modules.linear import MixLinear_GEMM
+from mixquant.utils.module import get_named_linears, set_op_by_name
 
 
 
@@ -96,20 +95,7 @@ class MixQuantizer:
 
         return weight_scale
     
-    def get_fused_scales(self,scales):
-        q_proj = scales['self_attn.q_proj']
-        k_proj = scales['self_attn.k_proj']
-        v_proj = scales['self_attn.v_proj']
-        maxscale = q_proj
-        if maxscale < k_proj:
-            maxscale = k_proj
-        if maxscale < v_proj:
-            maxscale = v_proj
-         
-        scales['self_attn.q_proj'] = maxscale
-        scales['self_attn.k_proj'] = maxscale
-        scales['self_attn.v_proj'] = maxscale
-        return scales
+ 
 
 
     def _apply_quant(self, module, named_linears: Dict[str, nn.Linear]):
@@ -118,23 +104,12 @@ class MixQuantizer:
             # NOTE: small regression in perplexity if linear layer uses .cpu().float()
             scales[name] = self.get_scales_of_each_weight(linear_layer.weight.data)
         
-        scales_ = self.get_fused_scales(scales)
-
-            # linear_layer.weight.data, scales = self.pseudo_quantize_tensor(
-            #     linear_layer.weight.data
-            # )
         
         for name, linear_layer in named_linears.items():
             # NOTE: small regression in perplexity if linear layer uses .cpu().float()
             linear_layer = linear_layer.cuda().half()
 
-            # linear_layer.weight.data, scales = self.pseudo_quantize_tensor(
-            #     linear_layer.weight.data
-            # )
-
             if self.version == 'MIX':
-                #scales = scales.contiguous()
-
                 q_linear_module = MixLinear_GEMM
 
             else:
@@ -143,10 +118,7 @@ class MixQuantizer:
 
             q_linear = q_linear_module.from_linear(
                 linear=linear_layer,
-                w_bit=self.w_bit,
-                group_size=self.group_size,
-                init_only=False,
-                scale=scales_[name]
+                init_only=False
             )
 
             linear_layer.cpu()
