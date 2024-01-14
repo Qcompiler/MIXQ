@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from typing import List
-from awq.modules.fused.block import MPTBlock, FalconDecoderLayer
+from mixquant.modules.fused.block import MPTBlock, FalconDecoderLayer
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 class MPTModel(nn.Module):

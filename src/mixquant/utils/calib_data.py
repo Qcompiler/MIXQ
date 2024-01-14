@@ -11,6 +11,7 @@ def get_calib_dataset(data: Union[str, List[str]] = "pileval",
             dataset = load_dataset("mit-han-lab/pile-val-backup", split="validation")
         else:
             dataset = load_dataset(data, split=split)
+            text_column = 'question'
         
         dataset = dataset.shuffle(seed=42)
 
@@ -23,6 +24,7 @@ def get_calib_dataset(data: Union[str, List[str]] = "pileval",
     
     samples = []
     n_run = 0
+   
     for data in dataset:
         line = data[text_column]
         line = line.strip()

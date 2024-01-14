@@ -166,19 +166,15 @@ if __name__ == "__main__":
             model_path, quant_file, fuse_layers=True,
             mix = True,  cache = cache
         )         
-    test_data = [
-         'Hamburg is in which country?\n',
-    ]
-
-    for text in test_data:
-        input_ids = tokenizer.encode(text, return_tensors="pt").to('cuda')
-
-        with torch.no_grad():
-            generated_ids = model.generate(
-                input_ids,
-                do_sample=True
-            )
-        print(tokenizer.decode([el.item() for el in generated_ids[0]]))
+    text = 'Hamburg is in which country?\n'
+    tokens = tokenizer.encode_plus(text)['input_ids']
+    tokens = torch.tensor(tokens)[None,].to('cuda')
+    stop_tokens = ["###", "[UNK]", "</s>"]
+    with torch.no_grad():
+        out = model.generate(tokens, do_sample=True, max_length=512, 
+                             bad_words_ids=[[tokenizer.encode(token)[0] for token in stop_tokens]])[0]
+        out = tokenizer.decode(out.cpu().numpy().tolist())
+        print(out)
 
 
 

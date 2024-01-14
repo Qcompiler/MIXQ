@@ -45,16 +45,15 @@ for batch in    512
 
 
                                 
-                # CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 ${CMD} \
-                # python demo.py  --model_type bitsandbytesfp16 --model_path  \
-                # /home/dataset/llama-2/Llama-2-${model}b-hf \
-                # --quant_file  /home/dataset/llama-2/checkpoint/Llama-2-${model}b-hf 
+                CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 ${CMD} \
+                python demo.py  --model_type bitsandbytesfp16 --model_path  \
+                /home/dataset/llama-2/checkpoint/Llama-2-${model}b-hf \
+                --quant_file  /home/dataset/llama-2/checkpoint/Llama-2-${model}b-hf 
 
 
                 CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 ${CMD} \
-                python demo.py  --model_type mix --model_path  \
-                /home/dataset/llama-2/Llama-2-${model}b-hf \
-                --quant_file  /home/dataset/llama-2/checkpoint/Llama-2-${model}b-hf 
+                python demo.py  --model_type mix --model_type mix --model_path  \
+                /home/dataset/llama-2/checkpoint/Llama-2-${model}b-hf --quant_file  /home/chenyidong/quant/Llama-2-${model}b-hf
 
                 #CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 python  evalppl.py --fp_features_num 128 --model_type mix --model_path /data/chenyidong/llama/Baichuan2-${model}B-Base --quant_file /data/chenyidong/llama/Baichuan2-${model}B-Base --n_ctx $batch --n_batch $batch
 

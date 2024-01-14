@@ -4,23 +4,25 @@ import os
 os.environ["WORLD_SIZE"] = "1"
 import sys
 sys.path.append('/home/chenyidong/quant/AutoAWQ')
-from awq import AutoAWQForCausalLM
+from mixquant import AutoForCausalLM
 from transformers import AutoTokenizer
 
-# model_path = '/mnt/data/zhongrx/Llama-2-13b-hf'
-# quant_path = '/mnt/data/chenyd/Llama-2-13b-awq'
+import argparse
+parser = argparse.ArgumentParser(description="Calculate Perplexity for a model.")
+parser.add_argument("--model_path", type=str,   help="Model path")
+parser.add_argument("--quant_file", type=str,   help="quant_file Model path")
+args = parser.parse_args()
 
-
-model_path = '/mnt/data/zhongrx/Llama-2-7b-hf'
-quant_path = '/data/chenyidong/Llama-2-7b-hf-mix'
-
+model_path = args.model_path
+quant_path = args.quant_file
 quant_config = { "w_bit": 8, "version": "MIX" }
 print(quant_path)
 # Load model
 # NOTE: pass safetensors=True to load safetensors
-model = AutoAWQForCausalLM.from_pretrained(model_path, mix = True, **{"low_cpu_mem_usage": True})
+model = AutoForCausalLM.from_pretrained(model_path, mix = True, **{"low_cpu_mem_usage": True},device_map='cpu')
 tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
+print(model)
 # Quantize
 model.quantize_mix(tokenizer, quant_config=quant_config)
 

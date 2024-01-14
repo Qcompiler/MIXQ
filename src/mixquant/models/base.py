@@ -176,7 +176,7 @@ class BaseForCausalLM(nn.Module):
 
         if mix is True:
             print("-------------mix----------")
-            self._load_mix_quantized_modules(self, model, quant_config, quant_config["version"])    
+            self._load_mix_quantized_modules(self, model, cache)    
         else:
             raise NotImplementedError
         
@@ -190,9 +190,9 @@ class BaseForCausalLM(nn.Module):
             max_memory=max_memory,
             dtype=torch_dtype
         )
-
+        print(device_map)
         # Load checkpoint
-        device_map = {"":"cpu"}
+        #device_map = {"":"cuda"}
 
         load_checkpoint_in_model(
             model,
@@ -214,9 +214,11 @@ class BaseForCausalLM(nn.Module):
             offload_dir=offload_folder
         )
      
-        if mix is True:
-            print("-------------quant weight ----------")
-            self.quant_weight(model,cache)    
+        # if mix is True:
+        #     print("-------------quant weight ----------")
+        #     self.quant_weight(model,cache)    
+
+
         return self(model, model_type, is_quantized=is_quantized, quant_config=quant_config)
 
     def _load_config(self, model_path, model_filename, safetensors=False, 
@@ -260,7 +262,7 @@ class BaseForCausalLM(nn.Module):
 
 
 
-    def _load_mix_quantized_modules(self, model, quant_config, version):
+    def _load_mix_quantized_modules(self, model, MixGemmcache):
         # Real quantization of weights
 
         # Get blocks of model
@@ -275,10 +277,24 @@ class BaseForCausalLM(nn.Module):
  
             for name, module in named_linears.items():
 
-                q_linear =  MixLinear_GEMM(module.in_features, module.out_features,
-                                           module.bias is not None,
-                                           dev = next(layer.parameters()).device)
+
+                # online mod
+                # q_linear =  MixLinear_GEMM(module.in_features, module.out_features,
+                #                            module.bias is not None,
+                #                            dev = next(layer.parameters()).device)
  
+                #from_linear(cls, linear, weight_only=False, init_only=False)
+
+                if "o_proj" in name or "down_proj" in name:
+                    weight_only = True
+                else:
+                    weight_only = False
+                q_linear =  MixLinear_GEMM.from_linear(module,
+                                           weight_only = weight_only, 
+                                           init_only = True,
+                                           cache = MixGemmcache)
+
+                q_linear.to(next(layer.parameters()).device)
                 set_op_by_name(layer, name, q_linear)
 
 

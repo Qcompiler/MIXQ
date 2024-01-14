@@ -66,7 +66,7 @@ class LlamaFuser:
     
     def fuse_attention(self, MixGemmCache):
         for name, module in self.attention_modules:
-            qkv_layer  = self._fuse_qkv(module)
+            qkv_layer  = self._fuse_qkv(module, MixGemmCache)
             try:
                 num_key_value_heads = module.num_key_value_heads
             except:
@@ -85,7 +85,7 @@ class LlamaFuser:
             )
             set_module_name(self.model, name, attn)
     
-    def _fuse_qkv(self, module: LlamaAttention):
+    def _fuse_qkv(self, module: LlamaAttention,cache):
         try:
             q_proj, k_proj, v_proj = module.q_proj, module.k_proj, module.v_proj
         except:
@@ -99,27 +99,23 @@ class LlamaFuser:
  
         if isinstance(q_proj, MixLinear_GEMM):
             qkv_layer = MixLinear_GEMM(q_proj.in_features,q_proj.out_features + k_proj.out_features + v_proj.out_features,
-                                        q_proj.bias is not None,next(iter(module.state_dict().values())).device)
-
- 
- 
-
-
+                                        q_proj.bias is not None,
+                                        next(iter(module.state_dict().values())).device,
+                                        False,
+                                        cache)
 
 
- 
         
         if isinstance(qkv_layer, MixLinear_GEMM):
-            shapew = qkv_layer.weight.shape
-            qkv_layer.weight = torch.cat([q_proj.weight, k_proj.weight, v_proj.weight], dim=0)
+            shapew = qkv_layer.q_weight.shape
+            qkv_layer.q_weight = torch.cat([q_proj.q_weight, k_proj.q_weight, v_proj.q_weight], dim=0)
+            qkv_layer.scale_col = torch.cat([q_proj.scale_col, k_proj.scale_col, v_proj.scale_col], dim=1)
 
-            assert shapew[0] == qkv_layer.weight.shape[0]
-            assert shapew[1] == qkv_layer.weight.shape[1]
-            # shapew = qkv_layer.qweight.shape
-            # qkv_layer.qweight = torch.cat([q_proj.qweight, k_proj.qweight, v_proj.qweight], dim=0)
-            # qkv_layer.scale = q_proj.scale
-            # assert shapew[0] == qkv_layer.qweight.shape[0]
-            # assert shapew[1] == qkv_layer.qweight.shape[1]
+            assert shapew[0] == qkv_layer.q_weight.shape[0]
+            assert shapew[1] == qkv_layer.q_weight.shape[1]
+            assert shapew[0] == qkv_layer.scale_col.shape[1]
+            assert 1 == qkv_layer.scale_col.shape[0]
+
             if q_proj.bias is not None:
                 raise NotImplementedError
             else:
@@ -128,7 +124,13 @@ class LlamaFuser:
         else:
             raise "no implement"
         
-
+        q_proj.q_weight = q_proj.q_weight.to('cpu')
+        k_proj.q_weight = k_proj.q_weight.to('cpu')
+        v_proj.q_weight = v_proj.q_weight.to('cpu')
+        q_proj.scale_col = q_proj.scale_col.to('cpu')
+        k_proj.scale_col = k_proj.scale_col.to('cpu')
+        v_proj.scale_col = v_proj.scale_col.to('cpu')
+        torch.cuda.empty_cache()
         return qkv_layer
 
     def fuse_rmsnorm(self):

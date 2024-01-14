@@ -54,6 +54,8 @@ class MixQuantizer:
 
         # patch layer 0 to catch input and kwargs
         modules[0] = Catcher(modules[0])
+
+
         try:
             self.model(samples.to(next(self.model.parameters()).device))
         except ValueError:  # work with early exit
@@ -115,13 +117,18 @@ class MixQuantizer:
             else:
                 raise NotImplementedError
             
+            weight_only = False
+            if "o_proj" in name or "down_proj" in name:
+                weight_only =  True
+
 
             q_linear = q_linear_module.from_linear(
                 linear=linear_layer,
+                weight_only = weight_only,
                 init_only=False
             )
 
             linear_layer.cpu()
-            q_linear.to(next(module.parameters()).device)
+
             set_op_by_name(module, name, q_linear)
             clear_memory()
