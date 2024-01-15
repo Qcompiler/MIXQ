@@ -24,14 +24,14 @@ class MixQuantizer:
         self.calib_data = calib_data
         self.split = split
         self.text_column = text_column
-        self.modules, self.module_kwargs, self.inps = self.init_quant()
+        self.modules, self.module_kwargs= self.init_quant()
     def init_quant(self, n_samples=128, seqlen=512):
         modules = self.f16_model.get_model_layers(self.model)
-        samples = get_calib_dataset(
-            data=self.calib_data, tokenizer=self.tokenizer, n_samples=n_samples, block_size=seqlen,
-            split=self.split, text_column=self.text_column
-        )
-        samples = torch.cat(samples, dim=0)
+        # samples = get_calib_dataset(
+        #     data=self.calib_data, tokenizer=self.tokenizer, n_samples=n_samples, block_size=seqlen,
+        #     split=self.split, text_column=self.text_column
+        # )
+        # samples = torch.cat(samples, dim=0)
 
         inps = []
         layer_kwargs = {}
@@ -56,13 +56,12 @@ class MixQuantizer:
         modules[0] = Catcher(modules[0])
 
 
-        try:
-            self.model(samples.to(next(self.model.parameters()).device))
-        except ValueError:  # work with early exit
-            pass
-        del samples
+        # try:
+        #     self.model(samples.to(next(self.model.parameters()).device))
+        # except ValueError:  # work with early exit
+        #     pass
+        # del samples
         modules[0] = modules[0].module  # restore
-        inps = inps[0]
 
         modules[0] = modules[0].cpu()
         self.f16_model.move_embed(self.model, "cpu")
@@ -72,7 +71,7 @@ class MixQuantizer:
         if "attention_mask" in layer_kwargs.keys():
             layer_kwargs["attention_mask"] = layer_kwargs["attention_mask"].to("cuda")
 
-        return modules, layer_kwargs, inps
+        return modules, layer_kwargs
     
 
     def quantize(self):

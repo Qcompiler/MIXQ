@@ -7,9 +7,9 @@ class MistralMixForCausalLM(BaseForCausalLM):
     max_new_tokens_key = "max_position_embeddings"
 
     @staticmethod
-    def fuse_layers(model: MistralForCausalLM, quant_config: Dict):
+    def fuse_layers(model: MistralForCausalLM, quant_config: Dict, mix, cache):
         fuser = MistralFuser(model, quant_config)
-        fuser.fuse_attention()
+        fuser.fuse_attention(cache)
         fuser.fuse_rmsnorm()
         fuser.fuse_mlp()
     
@@ -33,7 +33,7 @@ import torch
 from typing import List, Tuple, Union
 from mixquant.utils.utils import set_module_name
 from mixquant.modules.fused.mlp import MixLlamaMLP
-from mixquant.modules.fused.attn import QuantAttentionFused
+from mixquant.modules.fused.mistral_attn import MistralQuantAttentionFused
 from mixquant.modules.fused.norm import FasterTransformerRMSNorm
 from mixquant.modules.linear import  MixLinear_GEMM
 
@@ -59,17 +59,19 @@ class MistralFuser:
             if isinstance(module, MistralMLP)
         ]
     
-    def fuse_attention(self):
+    def fuse_attention(self,cache):
         for name, module in self.attention_modules:
-            qkv_layer  = self._fuse_qkv(module)
-            attn = QuantAttentionFused(
+            qkv_layer  = self._fuse_qkv(module, cache)
+            attn = MistralQuantAttentionFused(
                 module.hidden_size,
                 module.num_heads,
                 module.num_key_value_heads,
                 qkv_layer, 
                 module.o_proj,
                 next(iter(qkv_layer.state_dict().values())).device,
-                self.model.config.max_new_tokens
+                self.model.config.max_new_tokens,
+                MixGemmCache = cache,
+                config = self.model.config
             )
             set_module_name(self.model, name, attn)
     

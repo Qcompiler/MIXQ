@@ -52,6 +52,7 @@ class MixLinear_GEMM(nn.Module):
 
     @classmethod
     def from_linear(cls, linear, weight_only=False, init_only=False,cache=None):
+
         quant_linear = cls(linear.in_features, linear.out_features, linear.bias is not None, 
                            linear.weight.device,weight_only,cache)
         if init_only is True: 
@@ -201,6 +202,7 @@ class MixLinear_GEMM(nn.Module):
              
             cache.activation_outliers = mixlib.ExtractOutliersAndSetToZeros(self.ind,inputs)
 
+            
             outliers_fp16 = torch.mm( cache.activation_outliers ,  self.weight_cache.T)
  
             
@@ -208,7 +210,8 @@ class MixLinear_GEMM(nn.Module):
             outliers_fp16 =  None
 
         #print("after compute outliers",torch.cuda.memory_allocated()/1024/1024 - memory)
-        cache.x_scale = torch.max(inputs.abs(),dim=1)[0] / 127.0
+        cache.x_scale = torch.amax(inputs.abs(),dim=1) / 127.0
+
 
         #print("after compute x scale",torch.cuda.memory_allocated()/1024/1024 - memory)
         if self.add_outliers:
@@ -233,7 +236,7 @@ class MixLinear_GEMM(nn.Module):
                 cache.ind = self.ind
 
     
-                cache.x_scale = torch.max(inputs.abs(),dim=1)[0] / 127.0
+                cache.x_scale = torch.amax(inputs.abs(),dim=1) / 127.0
  
             self.cnt += 1
             if self.cnt >= 10 or len(self.ind) > 256:
@@ -248,21 +251,21 @@ class MixLinear_GEMM(nn.Module):
 
         if outliers_fp16 is None:
 
-
-
             y1 = mixlib.int8FusedDequantize(cache.q_xcache, 
-                                                    self.q_weight, 
-                                                    cache.x_scale,
-                                                    self.scale_col,
-                                                    self.cache.zeros,
-                                                    M,self.out_features,self.in_features)    
+                                            self.q_weight, 
+                                            cache.x_scale,
+                                            self.scale_col,
+                                            self.cache.zeros,
+                                            M,self.out_features,
+                                            self.in_features)    
         else:
             y1 = mixlib.int8FusedDequantize(cache.q_xcache, 
-                                                    self.q_weight, 
-                                                    cache.x_scale,
-                                                    self.scale_col,
-                                                    outliers_fp16,
-                                                    M,self.out_features,self.in_features)
+                                            self.q_weight, 
+                                            cache.x_scale,
+                                            self.scale_col,
+                                            outliers_fp16,
+                                            M,self.out_features,
+                                            self.in_features)
 
         if self.bias is not None:
             y1 += self.bias
@@ -314,8 +317,7 @@ class MixLinear_GEMM(nn.Module):
     @torch.no_grad()
     def forward_without_preconditionFusedSilu(self, x, cache):
         
-        #memory = torch.cuda.memory_allocated()/1024/1024
-        #print("start forward",memory)     
+   
         inputs = x.reshape(-1, x.shape[-1])
         M =  inputs.shape[0]
         assert M == cache.shape[0]
@@ -326,7 +328,6 @@ class MixLinear_GEMM(nn.Module):
             self.weight_cache = self.q_weight[:,self.ind].to(torch.float16) 
             self.weight_cache *=  self.scale_col.T
             self.forward_without_precondition_len = len(self.ind)
-            #print("after weight_cache",torch.cuda.memory_allocated()/1024/1024 - memory)
         if len(self.ind):
              
 

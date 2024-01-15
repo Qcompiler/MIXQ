@@ -9,6 +9,7 @@ for batch in    512
         do
             #model_type=Aquila2
             model_type=opt
+            model_type=Mistral
             model_type=Llama-2
             data_type=mix
 

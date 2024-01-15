@@ -364,3 +364,8 @@ class QuantAttentionFused_(torch.nn.Module):
             attn_weights = None
 
         return attn_output, attn_weights, past_key_value
+
+
+
+
+
