@@ -1940,3 +1940,310 @@ torch::Tensor int8FusedDequantizeSilu(const torch::Tensor &A,
                          at::DeviceType::CUDA);
   return int8FusedDequantizeSiluCUDA(A, B, scale_row, scale_col, y,  M, N, K);
 }
+
+
+
+
+template <typename T>
+__device__ __half convertToHalf(T value) {
+  return __int2half_rn(static_cast<int>(value));
+}
+
+template <>
+__device__ __half convertToHalf(torch::Half value) {
+  return (__half)value;
+}
+
+template <typename T>
+__global__ void dequantizationKernel(torch::Half *__restrict__ out,
+                                     const T *__restrict__ x,
+                                     const torch::Half *__restrict__ scaleRow,
+                                     const torch::Half *__restrict__ scaleCol,
+                                     const torch::Half *__restrict__ y,
+                                     const unsigned rows, const unsigned cols) {
+  const unsigned row = threadIdx.y + blockIdx.y * blockDim.y;
+  const unsigned col = threadIdx.x + blockIdx.x * blockDim.x;
+  if (col >= cols) {
+    return;
+  }
+
+  if (row >= rows) {
+    return;
+  }
+
+  float xElement =  static_cast<float>(x[col + row * cols]);
+
+  out[col + row * cols] =
+      __hadd(   __float2half( ( xElement * __half2float(scaleRow[row])) * __half2float(scaleCol[col]) ) ,
+      y[col + row * cols]);
+}
+
+
+torch::Tensor dequantizationCUDA(const torch::Tensor &x,
+                                 const torch::Tensor &scaleRow,
+                                 const torch::Tensor &scaleCol,
+                                 const torch::Tensor &y, int M, int N) {
+
+  unsigned rows = x.size(0);
+  unsigned cols = x.size(1);
+    
+
+  auto out = torch::empty({M, N}, torch::dtype(torch::kF16).device(x.device()));
+
+  //auto out = torch::empty_like(y);
+  dim3 block{std::min<unsigned>(cols, 16),
+             std::min<unsigned>((rows - 1) + 1, 16)};
+  dim3 grid{(cols - 1) / block.x + 1, (rows - 1) / block.y + 1};
+  dequantizationKernel<<<grid, block>>>(
+      out.data_ptr<torch::Half>(), x.data_ptr<int>(),
+      scaleRow.data_ptr<torch::Half>(), scaleCol.data_ptr<torch::Half>(),
+      y.data_ptr<torch::Half>(), rows, cols);
+  return out;
+}
+
+
+torch::Tensor dequantizeInt8(const torch::Tensor &x, const torch::Tensor &scaleRow,
+                         const torch::Tensor &scaleCol, const torch::Tensor &y,
+                         const int bits, int M, int N) {
+
+
+    return dequantizationCUDA(x, scaleRow, scaleCol, y, M, N);
+
+}
+
+
+
+__forceinline__ __host__ __device__ float silu(float x)
+{
+    return x / (1.f + expf(-x));
+}
+template <typename T>
+__global__ void dequantizationKernelSilu(torch::Half *__restrict__ out,
+                                     const T *__restrict__ x,
+                                     const torch::Half *__restrict__ scaleRow,
+                                     const torch::Half *__restrict__ scaleCol,
+                                     const torch::Half *__restrict__ y,
+                                     const unsigned rows, const unsigned cols) {
+  const unsigned row = threadIdx.y + blockIdx.y * blockDim.y;
+  const unsigned col = threadIdx.x + blockIdx.x * blockDim.x;
+  if (col >= cols) {
+    return;
+  }
+
+  if (row >= rows) {
+    return;
+  }
+
+  float xElement =  static_cast<float>(x[col + row * cols]);
+  float tmp  = silu(  ( xElement * __half2float(scaleRow[row])) * __half2float(scaleCol[col])   +  __half2float(y[col + row * cols]) );
+  out[col + row * cols] =  __float2half(tmp);
+  
+}
+torch::Tensor dequantizationCUDASilu(const torch::Tensor &x,
+                                 const torch::Tensor &scaleRow,
+                                 const torch::Tensor &scaleCol,
+                                 const torch::Tensor &y, int M, int N) {
+
+  unsigned rows = x.size(0);
+  unsigned cols = x.size(1);
+    
+
+  auto out = torch::empty({M, N}, torch::dtype(torch::kF16).device(x.device()));
+
+  //auto out = torch::empty_like(y);
+  dim3 block{std::min<unsigned>(cols, 16),
+             std::min<unsigned>((rows - 1) + 1, 16)};
+  dim3 grid{(cols - 1) / block.x + 1, (rows - 1) / block.y + 1};
+  dequantizationKernelSilu<<<grid, block>>>(
+      out.data_ptr<torch::Half>(), x.data_ptr<int>(),
+      scaleRow.data_ptr<torch::Half>(), scaleCol.data_ptr<torch::Half>(),
+      y.data_ptr<torch::Half>(), rows, cols);
+  return out;
+}
+
+
+torch::Tensor dequantizeInt8Silu(const torch::Tensor &x, const torch::Tensor &scaleRow,
+                         const torch::Tensor &scaleCol, const torch::Tensor &y,
+                         const int bits, int M, int N) {
+
+
+    return dequantizationCUDASilu(x, scaleRow, scaleCol, y, M, N);
+
+}
+
+#include <cutlass/core_io.h>
+#include <cutlass/cutlass.h>
+#include <cutlass/half.h>
+
+#include <cutlass/gemm/device/gemm.h>
+#include <cutlass/numeric_types.h>
+#include <cutlass/numeric_types.h>
+
+
+torch::Tensor linear_a8_w8_b32_o32(torch::Tensor &input,  // INT8
+                                   torch::Tensor &weight, // INT8
+                                   torch::Tensor &cache){
+  auto M = input.size(0);
+  auto N = weight.size(0);
+  auto K = input.size(1);
+  auto options = torch::TensorOptions().dtype(torch::kInt32).device(input.device());  
+  at::Tensor out = torch::zeros({M, N}, options);    
+
+//   using ElementOutput = int32_t;
+//   using ElementAccumulator = int32_t;
+//   using ElementComputeEpilogue = int32_t;
+//   using ElementInputA = int8_t; // <- data type of elements in input matrix A
+//   using ElementInputB = int8_t; // <- data type of elements in input matrix B
+
+//   // The code section below describes matrix layout of input and output
+//   // matrices. Column Major for Matrix A, Row Major for Matrix B and Row Major
+//   // for Matrix C
+//   using LayoutInputA = cutlass::layout::RowMajor;
+//   using LayoutInputB = cutlass::layout::ColumnMajor;
+//   using LayoutOutput = cutlass::layout::RowMajor;
+
+
+//   using Gemm = cutlass::gemm::device::Gemm<
+//       int8_t, cutlass::layout::RowMajor, int8_t, cutlass::layout::ColumnMajor,
+//       ElementOutput, cutlass::layout::RowMajor, ElementAccumulator,
+//       cutlass::arch::OpClassTensorOp, cutlass::arch::Sm90,
+//       cutlass::gemm::GemmShape<256, 128, 64>,
+//       cutlass::gemm::GemmShape<64, 64, 64>, cutlass::gemm::GemmShape<16, 8, 32>,
+//       cutlass::epilogue::thread::LinearCombination<
+//           ElementOutput, 128 / cutlass::sizeof_bits<ElementOutput>::value,
+//           ElementAccumulator, ElementComputeEpilogue,
+//           cutlass::epilogue::thread::ScaleType::NoBetaScaling>,
+//       cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>, 3>;
+
+
+//   auto input_size = cutlass::MatrixCoord(M, K);
+//   auto weight_size = cutlass::MatrixCoord(K, N);
+//   auto output_size = cutlass::MatrixCoord(M, N);
+
+//   auto device = input.device();
+//   // use the broadcasted bias as the output
+
+//   // constexpr int kSparse = Gemm::kSparse;
+//   // How many elements of A are covered per ElementE
+//   // constexpr int kElementsPerElementE = Gemm::kElementsPerElementE;
+//   // The size of individual meta data
+//   // constexpr int kMetaSizeInBits = Gemm::kMetaSizeInBits;
+//   cutlass::gemm::GemmCoord problem_size(M, N, K);
+
+//   cutlass::TensorRef<ElementInputA, LayoutInputA> input_ref(
+//       input.data_ptr<int8_t>(), LayoutInputA::packed(input_size));
+//   cutlass::TensorRef<ElementInputB, LayoutInputB> weight_ref(
+//       weight.data_ptr<int8_t>(), LayoutInputB::packed(weight_size));
+//   cutlass::TensorRef<ElementOutput, LayoutOutput> out_ref(
+//       out.data_ptr<int32_t>(), LayoutOutput::packed(output_size));
+
+//   // Initialize alpha and beta for dot product computation
+//   ElementComputeEpilogue alpha = ElementComputeEpilogue(1);
+
+//   typename Gemm::Arguments arguments{
+//       problem_size, // <- problem size of matrix multiplication
+//       input_ref,    // <- reference to matrix A on device
+//       weight_ref,   // <- reference to matrix B on device
+//       out_ref,      // <- reference to matrix C on device
+//       out_ref,      // <- reference to matrix D on device
+//       {alpha},      1};
+//   Gemm gemm_op;
+
+
+
+//   // Check the problem size is supported or not
+//   cutlass::Status status = gemm_op.can_implement(arguments);
+//   if (status != cutlass::Status::kSuccess) {
+//     throw std::runtime_error("cutlass cannot implement");
+//   }
+
+//   // Initialize CUTLASS kernel with arguments and workspace pointer
+//   status = gemm_op.initialize(arguments, cache.data_ptr<int8_t>());
+//   if (status != cutlass::Status::kSuccess) {
+//     throw std::runtime_error("cutlass cannot initialize");
+//   }
+
+//   status = gemm_op();
+//   if (status != cutlass::Status::kSuccess) {
+//     throw std::runtime_error("cutlass cannot run");
+//   }
+
+  return out;
+}
+
+
+
+__device__ void warpReduce(volatile half* cache, unsigned int tid){
+
+    cache[tid] =  __hmax ( __habs(cache[tid + 32]),  cache[tid]);
+    __syncthreads();
+    cache[tid] =  __hmax ( __habs(cache[tid + 16]),  cache[tid]);
+    __syncthreads();
+    cache[tid] =  __hmax ( __habs(cache[tid + 8]),  cache[tid]);
+    __syncthreads();
+    cache[tid] =  __hmax ( __habs(cache[tid + 4]),  cache[tid]);
+    __syncthreads();
+    cache[tid] =  __hmax ( __habs(cache[tid + 2]),  cache[tid]);
+    __syncthreads();
+    cache[tid] =  __hmax ( __habs(cache[tid + 1]),  cache[tid]);
+    __syncthreads();
+}
+
+template<int size>
+__global__ void FindRowScaleKernel(int8_t * output, const half * d_in, half * scale, int rows, int cols){
+
+    __shared__ half sdata[size];
+
+    // each thread loads one element from global to shared mem
+    unsigned int tid = threadIdx.x;
+    unsigned int bid = blockIdx.x ;
+    if (bid > rows)
+        return ;
+    const  __half *start = d_in + bid * cols;
+    int8_t * d_out = output + bid * cols;
+    sdata[tid] = __habs(start[tid]); 
+    for (int i = tid + size; i < cols; i += size)
+        sdata[tid] = __hmax ( __habs(start[i]),  sdata[tid] ); 
+    __syncthreads();
+
+
+    // do reduction in shared mem
+    for (unsigned int s=blockDim.x/2; s >= 1; s >>=1 ) {
+        if (tid < s) {
+            sdata[tid] =  __hmax ( __habs(sdata[tid + s]),  sdata[tid]);
+        }
+        __syncthreads();
+    }
+
+    // write result for this block to global mem
+    //if (tid < 32) warpReduce(sdata, tid);
+
+    __syncthreads();
+
+    half quant_scales = __hdiv( sdata[0], 127.0);
+    if (tid == 0){
+        scale[bid] = quant_scales;
+    }
+    // quant
+    for (int i = tid ; i < cols; i += size)
+        d_out[i] =  static_cast<int8_t>(__half2int_rn( __hdiv( start[i], quant_scales ) ))  ; 
+    __syncthreads();    
+
+}
+
+torch::Tensor FindRowScale(  const torch::Tensor &x,  torch::Tensor &scaleRow,
+                         int rows, int cols) {
+
+
+  auto options = torch::TensorOptions().dtype(torch::kInt8).device(x.device());
+  auto quant_out = torch::zeros(
+      {rows, cols}, options);
+    dim3 block(32);
+    dim3 grid(rows, 1);
+    FindRowScaleKernel<32><<<grid, block>>>(
+        (int8_t *)quant_out.data_ptr<int8_t>(),
+        (half *)x.data_ptr<torch::Half>(), (half *)scaleRow.data_ptr<torch::Half>(),
+         rows, cols);
+    return quant_out;
+
+}

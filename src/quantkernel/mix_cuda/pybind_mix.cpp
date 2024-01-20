@@ -183,7 +183,22 @@ torch::Tensor int8FusedDequantizeSilu(const torch::Tensor &A,
                                   const torch::Tensor &scale_col,
                                   const torch::Tensor &y, int m, int n, int k);
 
-                                  
+
+torch::Tensor dequantizeInt8(const torch::Tensor &x, const torch::Tensor &scaleRow,
+                         const torch::Tensor &scaleCol, const torch::Tensor &y,
+                         const int bits, int M, int N) ;
+
+
+torch::Tensor linear_a8_w8_b32_o32(torch::Tensor &input,  // INT8
+                                   torch::Tensor &weight, // INT8
+                                   torch::Tensor &cache);
+torch::Tensor dequantizeInt8Silu(const torch::Tensor &x, const torch::Tensor &scaleRow,
+                         const torch::Tensor &scaleCol, const torch::Tensor &y,
+                         const int bits, int M, int N);
+
+torch::Tensor FindRowScale(  const torch::Tensor &x,  torch::Tensor &scaleRow,
+                         int rows, int cols) ;
+
 void layernorm_forward_cuda(torch::Tensor _input, torch::Tensor _gamma, torch::Tensor _out, float eps);
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("cigemmlt_ampere_32", &cigemmlt_ampere_32, "cigemmlt_ampere_32");
@@ -226,6 +241,17 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("layernorm_forward_cuda", &layernorm_forward_cuda,
         "layernorm_forward_cuda");
-        
+
+    m.def("dequantizeInt8", &dequantizeInt8,
+        "dequantizeInt8");
+    m.def("dequantizeInt8Silu", &dequantizeInt8Silu,
+        "dequantizeInt8Silu");
+
+
+    m.def("linear_a8_w8_b32_o32", &linear_a8_w8_b32_o32,
+        "linear_a8_w8_b32_o32");       
+
+    m.def("FindRowScale", &FindRowScale,
+        "FindRowScale");  
 
 }

@@ -1,10 +1,9 @@
 
 
-CMD="srun  -p twills -A h100 --gres=gpu:h100:1 --export=ALL "
-export http_proxy=127.0.0.1:8892 
-export https_proxy=127.0.0.1:8892
+CMD="srun -p twills -A h100 --gres=gpu:h100:1"
+
 set -x
-for batch in    32
+for batch in    512
     do
     for seq in   64  
         do
@@ -14,11 +13,11 @@ for batch in    32
             model_type=gpt-j
             #model_type=falcon
             model_type=Llama-2
-            data_type=mix
+            data_type=awq
             #data_type=bitsandbytesfp16
             models=(  "Baichuan2-7b"  "Aquila2-7b" "Llama-2-7b" )
             
-            models=(  "Llama-2-7b"  )
+            models=(  "Llama-2-70b"  )
             for model in "${models[@]}"
                 do
                 echo ${model}
@@ -46,11 +45,11 @@ for batch in    32
                 #ppl mix
 
 
-                                
-                CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:8892 https_proxy=127.0.0.1:8892  \
-                 python evalppl.py --fp_features_num 128 --model_type ${data_type} --model_path  \
-                /data/chenyidong/checkpoint/${model} \
-                --quant_file /data/chenyidong/checkpoint/quant/${model} \
+                ${CMD}  sleep 3600 
+                CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 ${CMD}   \
+                python evalppl.py --fp_features_num 128 --model_type ${data_type} --model_path  \
+                /home/dataset/llama-2/checkpoint/${model} \
+                --quant_file /home/dataset/llama-2/checkpoint/awqquant/${model} \
                 --n_ctx $batch --n_batch $batch  --eval_accuracy True
 
                 # CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 ${CMD} \

@@ -77,7 +77,7 @@ def _get_unpad_data(padding_mask):
 class QuantAttentionFused(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
     def __init__(self,  hidden_size, n_heads, n_kv_heads, qkv_layer, o_proj, dev, max_seq_len, 
-                       use_alibi=False, attention_shapes=None,MixGemmCache=None):
+                       use_alibi=False, attention_shapes=None,MixGemmCache=None,layer_idx=None):
         super().__init__()
 
         # print("--hidden size is")
@@ -87,12 +87,12 @@ class QuantAttentionFused(nn.Module):
         # print(qkv_layer.in_features)
         # print(qkv_layer.out_features)
 
-
+        self.layer_idx = layer_idx
         self.hidden_size = hidden_size
         self.num_heads = n_heads
         self.head_dim = self.hidden_size // self.num_heads
         self.max_position_embeddings = max_seq_len
-        self.cache_batch_size = int(os.getenv("AWQ_BATCH_SIZE", "1"))
+        self.cache_batch_size = int(os.getenv("BATCH_SIZE", "1"))
         self.attention_shapes = get_attention_shapes(
             attention_shapes, max_seq_len, self.cache_batch_size, n_heads, n_kv_heads, self.head_dim
         )
@@ -233,22 +233,24 @@ class QuantAttentionFused(nn.Module):
 
         kv_seq_len = key_states.shape[-2]
         if past_key_value is not None:
-            kv_seq_len += past_key_value[0].shape[-2]
+            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
-        # [bsz, nh, t, hd]
 
         if past_key_value is not None:
-            # reuse k, v, self_attention
-            key_states = torch.cat([past_key_value[0], key_states], dim=2)
-            value_states = torch.cat([past_key_value[1], value_states], dim=2)
+            cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
+            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
-        past_key_value = (key_states, value_states) if use_cache else None
-
-        dropout_rate = 0.0
+        # TODO: These transpose are quite inefficient but Flash Attention requires the layout [batch_size, sequence_length, num_heads, head_dim]. We would need to refactor the KV cache
+        # to be able to avoid many of these transpose/reshape/view.
         query_states = query_states.transpose(1, 2)
         key_states = key_states.transpose(1, 2)
         value_states = value_states.transpose(1, 2)
+
+        dropout_rate = 0.0
+
+
+
         attn_output = self._flash_attention_forward(
             query_states, key_states, value_states, padding_mask, q_len, dropout=dropout_rate
         )
@@ -274,7 +276,7 @@ class QuantAttentionFused(nn.Module):
 
 
 # 百川 13B
-class QuantAttentionFused_(torch.nn.Module):
+class QuantAttentionFusedBaichuan13B(torch.nn.Module):
     def __init__(self,  hidden_size, n_heads, n_kv_heads, qkv_layer, o_proj, dev, max_seq_len, 
                        use_alibi=False, attention_shapes=None,MixGemmCache=None):
         super().__init__()
@@ -283,6 +285,7 @@ class QuantAttentionFused_(torch.nn.Module):
         self.num_heads = n_heads
         self.head_dim = self.hidden_size // self.num_heads
         self.max_position_embeddings = max_seq_len
+        self.MixGemmCache = MixGemmCache
 
         if (self.head_dim * self.num_heads) != self.hidden_size:
             raise ValueError(
@@ -306,11 +309,12 @@ class QuantAttentionFused_(torch.nn.Module):
         past_key_value   = None,
         output_attentions  = False,
         use_cache = False,
+        padding_mask = None,
         *args, **kwargs
     ) :
         bsz, q_len, _ = hidden_states.size()
 
-        proj = self.W_pack(hidden_states)
+        proj = self.W_pack(hidden_states, self.MixGemmCache)
         proj = (
             proj.unflatten(-1, (3, self.hidden_size))
             .unsqueeze(0)
@@ -338,6 +342,7 @@ class QuantAttentionFused_(torch.nn.Module):
 
         past_key_value = (key_states, value_states) if use_cache else None
 
+
         attn_weights = torch.matmul(
             query_states, key_states.transpose(2, 3)
         ) / math.sqrt(self.head_dim)
@@ -360,6 +365,7 @@ class QuantAttentionFused_(torch.nn.Module):
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
         attn_output = self.o_proj(attn_output)
 
+        
         if not output_attentions:
             attn_weights = None
 
@@ -368,4 +374,92 @@ class QuantAttentionFused_(torch.nn.Module):
 
 
 
+    def _upad_input(self, query_layer, key_layer, value_layer, padding_mask, query_length):
+        indices_k, cu_seqlens_k, max_seqlen_in_batch_k = _get_unpad_data(padding_mask)
+        batch_size, kv_seq_len, num_key_value_heads, head_dim = key_layer.shape
 
+        key_layer = index_first_axis(
+            key_layer.reshape(batch_size * kv_seq_len, num_key_value_heads, head_dim), indices_k
+        )
+        value_layer = index_first_axis(
+            value_layer.reshape(batch_size * kv_seq_len, num_key_value_heads, head_dim), indices_k
+        )
+        if query_length == kv_seq_len:
+            query_layer = index_first_axis(
+                query_layer.reshape(batch_size * kv_seq_len, self.num_heads, head_dim), indices_k
+            )
+            cu_seqlens_q = cu_seqlens_k
+            max_seqlen_in_batch_q = max_seqlen_in_batch_k
+            indices_q = indices_k
+        elif query_length == 1:
+            max_seqlen_in_batch_q = 1
+            cu_seqlens_q = torch.arange(
+                batch_size + 1, dtype=torch.int32, device=query_layer.device
+            )  # There is a memcpy here, that is very bad.
+            indices_q = cu_seqlens_q[:-1]
+            query_layer = query_layer.squeeze(1)
+        else:
+            # The -q_len: slice assumes left padding.
+            padding_mask = padding_mask[:, -query_length:]
+            query_layer, indices_q, cu_seqlens_q, max_seqlen_in_batch_q = unpad_input(query_layer, padding_mask)
+
+        return (
+            query_layer,
+            key_layer,
+            value_layer,
+            indices_q,
+            (cu_seqlens_q, cu_seqlens_k),
+            (max_seqlen_in_batch_q, max_seqlen_in_batch_k),
+        )
+    def _flash_attention_forward(
+        self, query_states, key_states, value_states, padding_mask, query_length, dropout=0.0, softmax_scale=None
+    ):
+        """
+        Calls the forward method of Flash Attention - if the input hidden states contain at least one padding token
+        first unpad the input, then computes the attention scores and pad the final attention scores.
+
+        Args:
+            query_states (`torch.Tensor`):
+                Input query states to be passed to Flash Attention API
+            key_states (`torch.Tensor`):
+                Input key states to be passed to Flash Attention API
+            value_states (`torch.Tensor`):
+                Input value states to be passed to Flash Attention API
+            padding_mask (`torch.Tensor`):
+                The padding mask - corresponds to a tensor of size `(batch_size, seq_len)` where 0 stands for the
+                position of padding tokens and 1 for the position of non-padding tokens.
+            dropout (`int`, *optional*):
+                Attention dropout
+            softmax_scale (`float`, *optional*):
+                The scaling of QK^T before applying softmax. Default to 1 / sqrt(head_dim)
+        """
+        # Contains at least one padding token in the sequence
+        if padding_mask is not None:
+            batch_size = query_states.shape[0]
+            query_states, key_states, value_states, indices_q, cu_seq_lens, max_seq_lens = self._upad_input(
+                query_states, key_states, value_states, padding_mask, query_length
+            )
+
+            cu_seqlens_q, cu_seqlens_k = cu_seq_lens
+            max_seqlen_in_batch_q, max_seqlen_in_batch_k = max_seq_lens
+
+            attn_output_unpad = flash_attn_varlen_func(
+                query_states,
+                key_states,
+                value_states,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_k=cu_seqlens_k,
+                max_seqlen_q=max_seqlen_in_batch_q,
+                max_seqlen_k=max_seqlen_in_batch_k,
+                dropout_p=dropout,
+                softmax_scale=softmax_scale,
+                causal=True,
+            )
+
+            attn_output = pad_input(attn_output_unpad, indices_q, batch_size, query_length)
+        else:
+            attn_output = flash_attn_func(
+                query_states, key_states, value_states, dropout, softmax_scale=softmax_scale, causal=True
+            )
+
+        return attn_output

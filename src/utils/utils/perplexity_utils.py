@@ -167,7 +167,8 @@ class Perplexity:
         num_batches = (n_ctx + n_batch - 1) // n_batch
 
         logits = []
-
+        if self._tokenizer.bos_token_id is None:
+            self._tokenizer.bos_token_id = 11
         for j in range(num_batches):
             batch_start = start + j * n_batch
             batch_size = min(end - batch_start, n_batch)

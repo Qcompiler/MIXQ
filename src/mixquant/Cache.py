@@ -3,18 +3,19 @@ import torch
 
 
 class MixLibCache:
-    def __init__(self, inputdim, max_outliers = 12288*3, max_batch=1024,max_weight_dim_N=12288,max_activatetion_dim=12288):
+    def __init__(self, inputdim = 512, sigma = 6):
         self.device = 'cuda'
+        self.x_scale = torch.zeros((inputdim,1),dtype=torch.float16).to('cuda')
 
         self.sigma = torch.zeros((1,1),dtype=torch.float16).to('cuda')  
-        self.zeros = torch.zeros((512,12288*3),dtype=torch.float16).to('cuda')    
-        self.sigma[0] = 6
+        self.zeros = torch.zeros((inputdim,12288*3),dtype=torch.float16).to('cuda')    
+        self.sigma[0] = sigma
         
-        self.x_scale = None
+
         self.ind = None
         self.shape = None
         self.activation_outliers = None
-
+        self.is_prefill = False
     def do_bench_cudagraph(self, fn):
         if torch.cuda.current_stream() == torch.cuda.default_stream():
             raise RuntimeError("Cannot capture graph in default stream. Please use side stream in benchmark code.")
@@ -32,9 +33,9 @@ class MixLibCache:
 
 
 class MLPCache:
-    def __init__(self):
+    def __init__(self, max_batch_size = 512):
         self.device = 'cuda'
-        self.x_scale = None
+        self.x_scale = torch.zeros((max_batch_size,1),dtype=torch.float16).to('cuda')
         self.ind = None
         self.shape = None
         self.activation_outliers = None

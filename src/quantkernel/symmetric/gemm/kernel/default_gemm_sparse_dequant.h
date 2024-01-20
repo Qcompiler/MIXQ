@@ -88,13 +88,13 @@ struct DefaultSparseGemmDequant
     : public DefaultSparseGemm<
           ElementA_, LayoutA_, kAlignmentA, ElementB_, LayoutB_, kAlignmentB,
           ElementC_, layout::RowMajor, ElementAccumulator,
-          arch::OpClassTensorOp, arch::Sm80, ThreadblockShape, WarpShape,
+          arch::OpClassTensorOp, arch::Sm90, ThreadblockShape, WarpShape,
           InstructionShape, EpilogueOutputOp, ThreadblockSwizzle, Stages,
           SplitKSerial, Operator> {
   using DefaultSparseGemm = DefaultSparseGemm<
       ElementA_, LayoutA_, kAlignmentA, ElementB_, LayoutB_, kAlignmentB,
       ElementC_, layout::RowMajor, ElementAccumulator, arch::OpClassTensorOp,
-      arch::Sm80, ThreadblockShape, WarpShape, InstructionShape,
+      arch::Sm90, ThreadblockShape, WarpShape, InstructionShape,
       EpilogueOutputOp, ThreadblockSwizzle, Stages, SplitKSerial, Operator>;
 
   using Epilogue = typename cutlass::epilogue::threadblock::symmetric::

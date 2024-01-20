@@ -2,7 +2,7 @@ from .base import BaseForCausalLM
 from typing import Dict
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaForCausalLM
 
-class LlamaMixQForCausalLM(BaseForCausalLM):
+class BaichuanMixQForCausalLM(BaseForCausalLM):
     layer_type = "LlamaDecoderLayer"
     max_new_tokens_key = "max_position_embeddings"
 
@@ -31,7 +31,7 @@ import torch
 from typing import List, Tuple, Union
 from mixquant.utils.utils import set_module_name
 from mixquant.modules.fused.mlp import  MixLlamaMLP
-from mixquant.modules.fused.attn import QuantAttentionFused
+from mixquant.modules.fused.attn import QuantAttentionFused, QuantAttentionFusedBaichuan13B
 from mixquant.modules.fused.norm import FasterTransformerRMSNorm
 from mixquant.modules.linear import  MixLinear_GEMM
 
@@ -65,28 +65,37 @@ class LlamaFuser:
         ]
     
     def fuse_attention(self, MixGemmCache):
-        
         for name, module in self.attention_modules:
-
-            layer_idx = int(name.split('.')[2])
             qkv_layer  = self._fuse_qkv(module, MixGemmCache)
             try:
                 num_key_value_heads = module.num_key_value_heads
             except:
                 # 为了处理百川的模型
-                print("do not find the attr module.num_key_value_heads")
                 num_key_value_heads = 32
-            attn = QuantAttentionFused(
-                module.hidden_size,
-                module.num_heads,
-                num_key_value_heads,
-                qkv_layer, 
-                module.o_proj,
-                next(iter(qkv_layer.state_dict().values())).device,
-                self.model.config.max_new_tokens,
-                MixGemmCache = MixGemmCache,
-                layer_idx = layer_idx
-            )
+
+            if self.model.config.num_hidden_layers == 40:
+                attn = QuantAttentionFusedBaichuan13B(
+                    module.hidden_size,
+                    module.num_heads,
+                    num_key_value_heads,
+                    qkv_layer, 
+                    module.o_proj,
+                    next(iter(qkv_layer.state_dict().values())).device,
+                    self.model.config.max_new_tokens,
+                    MixGemmCache = MixGemmCache
+                )
+
+            else:
+                attn = QuantAttentionFused(
+                    module.hidden_size,
+                    module.num_heads,
+                    num_key_value_heads,
+                    qkv_layer, 
+                    module.o_proj,
+                    next(iter(qkv_layer.state_dict().values())).device,
+                    self.model.config.max_new_tokens,
+                    MixGemmCache = MixGemmCache
+                )
             set_module_name(self.model, name, attn)
     
     def _fuse_qkv(self, module: LlamaAttention,cache):

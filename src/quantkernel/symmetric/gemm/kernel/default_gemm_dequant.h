@@ -100,7 +100,7 @@ template <
 struct DefaultGemmDequant
     : public DefaultGemm<ElementA_, LayoutA_, kAlignmentA, ElementB_, LayoutB_,
                          kAlignmentB, ElementC_, LayoutC_, ElementAccumulator,
-                         arch::OpClassTensorOp, arch::Sm80, ThreadblockShape,
+                         arch::OpClassTensorOp, arch::Sm90, ThreadblockShape,
                          WarpShape, InstructionShape, EpilogueOutputOp,
                          ThreadblockSwizzle, Stages, SplitKSerial, Operator,
                          SharedMemoryClear, GatherA, GatherB, ScatterD,
@@ -112,7 +112,7 @@ struct DefaultGemmDequant
   using DefaultGemm =
       DefaultGemm<ElementA_, LayoutA_, kAlignmentA, ElementB_, LayoutB_,
                   kAlignmentB, ElementC_, LayoutC_, ElementAccumulator,
-                  arch::OpClassTensorOp, arch::Sm80, ThreadblockShape,
+                  arch::OpClassTensorOp, arch::Sm90, ThreadblockShape,
                   WarpShape, InstructionShape, EpilogueOutputOp,
                   ThreadblockSwizzle, Stages, SplitKSerial, Operator,
                   SharedMemoryClear, GatherA, GatherB, ScatterD, PermuteDLayout,

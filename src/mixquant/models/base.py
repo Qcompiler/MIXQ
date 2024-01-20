@@ -11,7 +11,7 @@ from huggingface_hub import snapshot_download
 
 from transformers.modeling_utils import shard_checkpoint
 from mixquant.modules.linear import   MixLinear_GEMM
-from mixquant.utils.module import get_named_linears, set_op_by_name
+from mixquant.utils.module import get_named_linears, set_op_by_name, weight_only_map
 from transformers import AutoModelForCausalLM, AutoConfig, PreTrainedModel
 from accelerate import init_empty_weights, load_checkpoint_in_model, infer_auto_device_map
 
@@ -46,8 +46,7 @@ class BaseForCausalLM(nn.Module):
 
         quantizer = MixQuantizer(
             self, self.model, tokenizer, quant_config["w_bit"], quant_config["q_group_size"],
-            quant_config["version"], calib_data, split, text_column
-        )
+            quant_config["version"])
         quantizer.quantize()
         self.is_quantized = True
 
@@ -135,26 +134,8 @@ class BaseForCausalLM(nn.Module):
 
         return self(model, model_type, is_quantized=False, quant_config=quant_config)
     
-    @classmethod
-    def quant_weight(self, model,cache=None):
-        # Real quantization of weights
-        def get_mix_linears(module):
-            return {name: m for name, m in module.named_modules() if isinstance(m, MixLinear_GEMM)}
-        # Get blocks of model
-        layers = self.get_model_layers(model)
 
-        for i in tqdm(range(len(layers)), desc="quant mixed layers..."):
-            layer = layers[i]
-            
-            # Get every linear layer in a block
-            named_linears = get_mix_linears(layer)
-            for name, module in named_linears.items():
-                #pass
-                if "o_proj" in name or "down_proj" in name:
-                    module.quant_weight(cache,i, True)
-                else:
-                    module.quant_weight(cache,i, False)
- 
+
 
     @classmethod
     def from_quantized(self, model_path, model_type, model_filename='', 
@@ -213,10 +194,7 @@ class BaseForCausalLM(nn.Module):
             device_map=device_map,
             offload_dir=offload_folder
         )
-     
-        # if mix is True:
-        #     print("-------------quant weight ----------")
-        #     self.quant_weight(model,cache)    
+
 
 
         return self(model, model_type, is_quantized=is_quantized, quant_config=quant_config)
@@ -268,27 +246,27 @@ class BaseForCausalLM(nn.Module):
         # Get blocks of model
         layers = self.get_model_layers(model)
 
+        if isinstance(model.config.architectures,list):
+            name = model.config.architectures[0]
+        else:
+            name = model.config.architectures
+        weight_only_name = weight_only_map[ name ]
         for i in tqdm(range(len(layers)), desc="Replacing mixed layers..."):
             layer = layers[i]
 
             # Get every linear layer in a block
             named_linears = get_named_linears(layer)
 
- 
+            
             for name, module in named_linears.items():
 
 
-                # online mod
-                # q_linear =  MixLinear_GEMM(module.in_features, module.out_features,
-                #                            module.bias is not None,
-                #                            dev = next(layer.parameters()).device)
- 
-                #from_linear(cls, linear, weight_only=False, init_only=False)
+                weight_only = False
 
-                if "o_proj" in name or "down_proj" in name:
-                    weight_only = True
-                else:
-                    weight_only = False
+                for key in weight_only_name:
+                    if key in  name:
+                        weight_only = True
+                        break
                 q_linear =  MixLinear_GEMM.from_linear(module,
                                            weight_only = weight_only, 
                                            init_only = True,
