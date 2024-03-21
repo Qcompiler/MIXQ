@@ -1,7 +1,7 @@
 #include <iostream>
 #include <stdexcept>
 #include "common.h"
-
+#include<cuda_fp16.h>
  
 #define BLOCK_ROWS 256
 #define BLOCK_COLS 128
@@ -312,7 +312,7 @@ __global__ void mmaNaiveKernelop3(const half *__restrict__ A, const half *__rest
         // 需要写八个 half (每个 2 字节)
         if (lane_id < MMA_N * 2){
             targetB = &B_smem[lane_id / 2][0] + (lane_id % 2) * 8;
-            sourceB =  B + (warp_col + lane_id / 2) * K;
+            sourceB =  B + (warp_col + lane_id / 2) * lenind;
         }
     }
     // 一次放128个
@@ -333,7 +333,7 @@ __global__ void mmaNaiveKernelop3(const half *__restrict__ A, const half *__rest
                 int id =  ind_smem[(lane_id % 2)][j];
                 targetA[j] = sourceA_[id] ;
                 if (lane_id < MMA_N * 2)
-                    targetB[j] = sourceB[ id ] ;
+                    targetB[j] = sourceB[ j ] ;
             }
             
             __syncthreads();
@@ -377,22 +377,22 @@ __global__ void mmaNaiveKernelop3(const half *__restrict__ A, const half *__rest
         ind_smem[(lane_id % 2)][lane_id/4] =  ind  [K_tiles * MMA_K + (lane_id % 2) * 8 + lane_id/4 ];
         __syncthreads();
 
-
+        
         for (int kk = 0 ; kk < WARP_REPEAT_M ; ++kk )
         {
-            if (ptrl){
+            if (ptrl > 0){
                 targetA = &A_smem[lane_id / 2][0]  + (lane_id % 2) * 8;
                 sourceA = &A[(kk * MMA_M + warp_row + lane_id / 2) * K] ;
                 if (lane_id < MMA_N * 2){
                     targetB = &B_smem[lane_id / 2][0] + (lane_id % 2) * 8;
-                    sourceB = &B[ (warp_col + lane_id / 2) * K] ; 
+                    sourceB = &B[ (warp_col + lane_id / 2) * lenind] ; 
                 }
                 // int id =  K_tiles * MMA_K + (lane_id % 2) * 8  ;
                 for (int j = 0 ;j < ptrl; ++j){ 
                     int loc = ind_smem[lane_id % 2][ j];  
                     targetA[j] = sourceA[ loc];           
                     if (lane_id < MMA_N * 2) {    
-                        targetB[j] = sourceB[loc]; 
+                        targetB[j] = sourceB[j]; 
                     }         
                 }
             }
@@ -557,42 +557,7 @@ void mmaNaiveop3(half *A, half *B, half *C, size_t M, size_t N, size_t K, const 
 
 
 
-#include<cuda_fp16.h>
-// totally dense compute
-torch::Tensor Mixgemm(
-    const torch::Tensor& ind,
-    size_t lenid,
-    const torch::Tensor& mat1, //fp16
-    const torch::Tensor& mat2  //fp16
-    ){
-  auto m = mat1.sizes()[0];
-  auto n = mat2.sizes()[0];
-  auto k = mat1.sizes()[1];
 
-  //std::cout <<" k is" << k<<  std::endl;
-
-  auto options = torch::TensorOptions().dtype(torch::kFloat16).device(mat1.device());  
-  at::Tensor input = torch::zeros({m, n}, options);
-
-  half* input_ptr = (half *)input.data_ptr<at::Half>();
-  half* mat1_ptr = (half *)mat1.data_ptr<at::Half>();
-  half* mat2_ptr = (half *)mat2.data_ptr<at::Half>();
-  int* ind_ptr = (int *)ind.data_ptr<int>();
-
-    
-
-//   if (lenid < 8){
-//         // need to be optimized
-//         mmaNaiveop3(mat1_ptr, mat2_ptr, input_ptr, m, n, k, ind_ptr, lenid);
-//   }
-//   else {
-//         mmaNaiveREPEATK<4,2>  (mat1_ptr, mat2_ptr, input_ptr, m, n, k, ind_ptr, lenid);
-//   }
-  //mmaNaiveREPEATK<4,2>  (mat1_ptr, mat2_ptr, input_ptr, m, n, k, ind_ptr, lenid);  
-  //mmaNaiveSqureWarp<2>(mat1_ptr, mat2_ptr, input_ptr, m, n, k, ind_ptr, lenid);
-   
-  return input;
-}
 
 
 
@@ -2208,19 +2173,20 @@ __global__ void FindRowScaleKernel(int8_t * output, const half * d_in, half * sc
 
 
     // do reduction in shared mem
-    for (unsigned int s=blockDim.x/2; s >= 1; s >>=1 ) {
+    for (unsigned int s= blockDim.x/2; s >= 1; s >>=1 ) {
         if (tid < s) {
             sdata[tid] =  __hmax ( __habs(sdata[tid + s]),  sdata[tid]);
         }
         __syncthreads();
     }
 
+    half  max = sdata[0];
     // write result for this block to global mem
     //if (tid < 32) warpReduce(sdata, tid);
 
     __syncthreads();
 
-    half quant_scales = __hdiv( sdata[0], 127.0);
+    half quant_scales = __hdiv( max, 127.0);
     if (tid == 0){
         scale[bid] = quant_scales;
     }
@@ -2238,12 +2204,394 @@ torch::Tensor FindRowScale(  const torch::Tensor &x,  torch::Tensor &scaleRow,
   auto options = torch::TensorOptions().dtype(torch::kInt8).device(x.device());
   auto quant_out = torch::zeros(
       {rows, cols}, options);
-    dim3 block(32);
+    dim3 block(256);
     dim3 grid(rows, 1);
-    FindRowScaleKernel<32><<<grid, block>>>(
+    FindRowScaleKernel<256><<<grid, block>>>(
         (int8_t *)quant_out.data_ptr<int8_t>(),
         (half *)x.data_ptr<torch::Half>(), (half *)scaleRow.data_ptr<torch::Half>(),
          rows, cols);
     return quant_out;
 
+}
+
+
+
+
+
+
+
+template<int size>
+__global__ void FindRowScaleFusedExtracOutliersKernel(int8_t * output, half * d_in, half * scale, 
+    int *ind, int len_ind, half *outliers,
+    int rows, int cols){
+
+    __shared__ half sdata[size];
+
+ 
+    // each thread loads one element from global to shared mem
+    unsigned int tid = threadIdx.x;
+    unsigned int bid = blockIdx.x ;
+    if (bid > rows)
+        return ;
+    __half *start = d_in + bid * cols;
+    __half * outliers_start = outliers + bid *len_ind;
+    int8_t * d_out = output + bid * cols;
+
+    for (int i = tid; i < len_ind; i += size){
+
+        outliers_start[i] =  start[ind[i]];  
+        start[ind[i]] = (__half)(0.0);           
+
+    }
+
+    __syncthreads();
+    sdata[tid] = __habs(start[tid]); 
+    for (int i = tid + size; i < cols; i += size){
+
+        sdata[tid] = __hmax ( __habs(start[i]),  sdata[tid] ); 
+
+    }
+    __syncthreads();
+
+
+    // do reduction in shared mem
+    for (unsigned int s=blockDim.x/2; s >= 1; s >>=1 ) {
+        if (tid < s) {
+            sdata[tid] =  __hmax ( (sdata[tid + s]),  sdata[tid]);
+        }
+        __syncthreads();
+    }
+
+
+
+    half quant_scales = __hdiv( sdata[0], 127.0);
+    if (tid == 0){
+        scale[bid] = quant_scales;
+    }
+    // quant
+    for (int i = tid ; i < cols; i += size)
+        d_out[i] =  static_cast<int8_t>(__half2int_rn( __hdiv( start[i], quant_scales ) ))  ; 
+    __syncthreads();    
+
+}
+
+std::vector<torch::Tensor>
+ FindRowScaleFusedExtracOutliers(  torch::Tensor &x,  torch::Tensor &scaleRow,
+                         const torch::Tensor & ind,  int len_ind,
+                         int rows, int cols) {
+
+  
+
+  auto options = torch::TensorOptions().dtype(torch::kInt8).device(x.device());
+  auto quant_out = torch::zeros(
+      {rows, cols}, options);
+  auto options_outlier = torch::TensorOptions().dtype(torch::kFloat16).device(x.device());
+  auto outliers = torch::zeros(
+      {rows, len_ind}, options_outlier);
+
+
+    
+    dim3 grid(rows, 1);
+    
+    if (len_ind == 0){
+        dim3 block(32);
+        FindRowScaleKernel<32><<<grid, block>>>(
+            (int8_t *)quant_out.data_ptr<int8_t>(),
+            (half *)x.data_ptr<torch::Half>(), (half *)scaleRow.data_ptr<torch::Half>(),
+            rows, cols);
+    }
+    else{
+         dim3 block(32);
+        FindRowScaleFusedExtracOutliersKernel<32><<<grid, block>>>(
+            (int8_t *)quant_out.data_ptr<int8_t>(),
+            (half *)x.data_ptr<torch::Half>(), (half *)scaleRow.data_ptr<torch::Half>(),
+            (int *)ind.data_ptr<int>(), len_ind, (half *)outliers.data_ptr<torch::Half>(),
+            rows, cols);
+
+    }
+
+    std::vector<torch::Tensor> outputs = {quant_out, outliers};
+    return outputs;
+
+}
+
+
+
+
+
+
+
+template<int MMA, int NUM_WARP, int REPEATK>
+__device__ __forceinline__ void loaddense_v3_repeat_fill_zeros( half * shmd, const int len_shmd, const half* global,  
+        const int * ind,  const int lenind, const int stride,
+        int idx, int K){
+
+    int startcol =  idx / ( 2 * (NUM_WARP/REPEATK) ); 
+    int startrow = (idx % ( 2 * (NUM_WARP/REPEATK) ) ) *   ( (MMA/2) * REPEATK);    
+    int col = startcol ;
+    const half *global_tmp = global + col +  (startrow ) * K;
+    half *shmd_tmp = shmd + startrow * (MMA_K * REPEATK) + startcol;
+    idx = 0;
+    if (startcol < stride)
+        for (int i = 0; i <  ((MMA/2) * REPEATK ); i++) {
+            if (idx < len_shmd) {
+                shmd_tmp[idx] = global_tmp[ i * K];
+                idx += (MMA_K * REPEATK) ;
+            }
+        }
+    else{
+        for (int i = 0; i <  ((MMA/2) * REPEATK ); i++) {
+            if (idx < len_shmd) {
+                shmd_tmp[idx] = 0;
+                idx += (MMA_K * REPEATK) ;
+            }
+        }        
+    }
+}
+
+
+template<int MMA, int NUM_WARP, int REPEATK>
+__device__ __forceinline__ void loadsparse_v3_repeat_fill_zeros( half * shmd, const int len_shmd, const half* global,  
+        const int * ind,  const int lenind, const int stride,
+        int idx, int K){
+
+    int startcol =  idx / ( 2 * (NUM_WARP/REPEATK) ); 
+    int startrow = (idx % ( 2 * (NUM_WARP/REPEATK) ) ) *   ( (MMA/2) * REPEATK);    
+    int col = ind[startcol ];
+    const half *global_tmp = global + col +  (startrow ) * K;
+    half *shmd_tmp = shmd + startrow * (MMA_K * REPEATK) + startcol;
+    idx = 0;
+    if (startcol < stride)
+        for (int i = 0; i <  ((MMA/2) * REPEATK ); i++) {
+            if (idx < len_shmd) {
+                shmd_tmp[idx] = global_tmp[ i * K];
+                idx += (MMA_K * REPEATK) ;
+            }
+        }
+    else{
+        for (int i = 0; i <  ((MMA/2) * REPEATK ); i++) {
+            if (idx < len_shmd) {
+                shmd_tmp[idx] = 0;
+                idx += (MMA_K * REPEATK) ;
+            }
+        }        
+    }
+}
+
+template<int MMA, int NUM_WARP, int REPEATK, typename T>
+__device__ __forceinline__ void loaddense_v3_repeat( T * shmd, const int len_shmd, const T* global,  
+        const int * ind,  const int lenind, 
+        int idx, int K){
+
+    int startcol =  idx / ( 2 * (NUM_WARP/REPEATK) ); 
+    int startrow = (idx % ( 2 * (NUM_WARP/REPEATK) ) ) *   ( (MMA/2) * REPEATK);    
+    int col =  startcol ;
+    const half *global_tmp = global + col +  (startrow ) * K;
+    T  *shmd_tmp = shmd + startrow * (MMA_K * REPEATK) + startcol;
+    idx = 0;
+    for (int i = 0; i <  ((MMA/2) * REPEATK ); i++) {
+        if (idx < len_shmd) {
+            shmd_tmp[idx] = global_tmp[ i * K];
+            idx += (MMA_K * REPEATK) ;
+        }
+    }
+}
+
+template<int MMA, int NUM_WARP, int REPEATK, typename T>
+__device__ __forceinline__ void loadsparse_v3_repeat( T * shmd, const int len_shmd, const T* global,  
+        const int * ind,  const int lenind, 
+        int idx, int K){
+
+    int startcol =  idx / ( 2 * (NUM_WARP/REPEATK) ); 
+    int startrow = (idx % ( 2 * (NUM_WARP/REPEATK) ) ) *   ( (MMA/2) * REPEATK);    
+    int col = ind[startcol ];
+    const half *global_tmp = global + col +  (startrow ) * K;
+    T  *shmd_tmp = shmd + startrow * (MMA_K * REPEATK) + startcol;
+    idx = 0;
+    for (int i = 0; i <  ((MMA/2) * REPEATK ); i++) {
+        if (idx < len_shmd) {
+            shmd_tmp[idx] = global_tmp[ i * K];
+            idx += (MMA_K * REPEATK) ;
+        }
+    }
+}
+// 优化，一次多写一些shared memory
+template<int NUM_WARP, int REPEATK>
+__global__ void mmaNaiveKernelRepeatK(const half *__restrict__ A, const half *__restrict__ B, half *__restrict__ C, size_t M,
+                               size_t N, size_t K, const int* ind, size_t lenind) {
+    const size_t K_tiles =  lenind / (MMA_K * REPEATK); // 这儿应该是不能超过K个 你如不足16个 那么后面的16个就不能用向量化的方式导入了
+
+    const size_t warp_row = blockIdx.y * MMA_M * NUM_WARP;
+    const size_t warp_col = blockIdx.x * MMA_N * NUM_WARP;
+
+    if (warp_row >= M || warp_col >= N) {
+        return;
+    }
+
+    extern __shared__ half tmp[][MMA_K * REPEATK];
+    half *A_smem = &tmp[0][MMA_K * REPEATK];
+    half *B_smem = &tmp[MMA_M * NUM_WARP][MMA_K * REPEATK];
+    // __shared__ half A_smem[MMA_M * NUM_WARP][MMA_K * REPEATK];
+    // __shared__ half B_smem[MMA_N * NUM_WARP][MMA_K * REPEATK];
+ 
+    __shared__ int ind_smem[MMA_K * REPEATK];
+
+    const int tid =  threadIdx.x;
+    const int lane_id = threadIdx.x % WARP_SIZE;
+    const int warp_id = threadIdx.x / WARP_SIZE;
+    uint32_t RC[NUM_WARP][2] ;
+    for (int i = 0 ; i < NUM_WARP; ++i){
+        RC[i][0] = 0;
+        RC[i][1] = 0;
+
+    }
+
+
+     
+    // 计算
+    uint32_t RA[REPEATK][4];
+    uint32_t RB[REPEATK][NUM_WARP][2];
+    for (size_t i = 0; i < K_tiles; ++i) {
+        // 所有线程为偶数的用相同的 ind 
+        // 实际上我们只需要16个线程来把ind 写入shared
+        if (tid < MMA_K * REPEATK)
+            ind_smem[tid] =  ind  [  i * (MMA_K * REPEATK) +  tid];
+        
+        __syncthreads();
+        // 调度
+        //const int *id_ =  ind   +  i * MMA_K +  (lane_id % 2) * 8;
+        loadsparse_v3_repeat<MMA_M,NUM_WARP,REPEATK>( A_smem, MMA_M * MMA_K * NUM_WARP * REPEATK, 
+                A + (warp_row) * K,  
+                ind_smem,  MMA_K * REPEATK, 
+                tid,  K);
+        loaddense_v3_repeat<MMA_N,NUM_WARP,REPEATK>( B_smem, MMA_N * MMA_K * NUM_WARP * REPEATK, 
+                B + (warp_col) * K,  
+                ind_smem,  MMA_K * REPEATK, 
+                tid,  K);
+        
+        __syncthreads();
+
+        for (int repeat = 0 ; repeat < REPEATK; ++repeat){
+            uint32_t A_smem_lane_addr = __cvta_generic_to_shared(&A_smem[ (warp_id * MMA_M + lane_id % 16) * (MMA_K * REPEATK) + (lane_id / 16) * 8 + MMA_K * repeat]);
+            LDMATRIX_X4(RA[repeat][0], RA[repeat][1], RA[repeat][2], RA[repeat][3], A_smem_lane_addr);
+        
+            for (int w = 0 ; w < NUM_WARP; ++w){
+
+                uint32_t B_smem_lane_addr = __cvta_generic_to_shared(&B_smem[ (w * MMA_N + lane_id % 8) * (MMA_K * REPEATK) + ((lane_id / 8) % 2) * 8 + MMA_K * repeat]);
+                LDMATRIX_X2(RB[repeat][w][0], RB[repeat][w][1], B_smem_lane_addr);
+
+
+            }
+         }
+        for (int repeat = 0 ; repeat < REPEATK; ++repeat)
+            for (int w = 0 ; w < NUM_WARP; ++w) {
+                HMMA16816(RC[w][0], RC[w][1], RA[repeat][0], RA[repeat][1], RA[repeat][2], RA[repeat][3], RB[repeat][w][0], RB[repeat][w][1], 
+                        RC[w][0], RC[w][1]);
+            }
+       
+    }
+
+    // 处理最后一个tile 长度为 lenind - (MMA_K * REPEATK) * K_tiles
+    {
+        int stride = lenind - (MMA_K * REPEATK) * K_tiles;
+        if (stride){
+            // 导入最后一小段
+            if (tid < stride)
+                ind_smem[tid] =  ind  [  K_tiles * (MMA_K * REPEATK) +  tid];
+            __syncthreads();
+
+            loadsparse_v3_repeat_fill_zeros<MMA_M,NUM_WARP,REPEATK>( A_smem, MMA_M * MMA_K * NUM_WARP * REPEATK, 
+                    A + (warp_row) * K,  
+                    ind_smem,  MMA_K * REPEATK, stride,
+                    tid,  K);
+            loaddense_v3_repeat_fill_zeros<MMA_N,NUM_WARP,REPEATK>( B_smem, MMA_N * MMA_K * NUM_WARP * REPEATK, 
+                    B + (warp_col) * K,  
+                    ind_smem,  MMA_K * REPEATK, stride,
+                    tid,  K);            
+        __syncthreads();
+
+        for (int repeat = 0 ; repeat < REPEATK; ++repeat){
+            uint32_t A_smem_lane_addr = __cvta_generic_to_shared(&A_smem[ (warp_id * MMA_M + lane_id % 16) * (MMA_K * REPEATK) + (lane_id / 16) * 8 + MMA_K * repeat]);
+            LDMATRIX_X4(RA[repeat][0], RA[repeat][1], RA[repeat][2], RA[repeat][3], A_smem_lane_addr);
+        
+            for (int w = 0 ; w < NUM_WARP; ++w){
+
+                uint32_t B_smem_lane_addr = __cvta_generic_to_shared(&B_smem[ (w * MMA_N + lane_id % 8) * (MMA_K * REPEATK) + ((lane_id / 8) % 2) * 8 + MMA_K * repeat]);
+                LDMATRIX_X2(RB[repeat][w][0], RB[repeat][w][1], B_smem_lane_addr);
+
+
+            }
+         }
+        for (int repeat = 0 ; repeat < REPEATK; ++repeat)
+            for (int w = 0 ; w < NUM_WARP; ++w) {
+                HMMA16816(RC[w][0], RC[w][1], RA[repeat][0], RA[repeat][1], RA[repeat][2], RA[repeat][3], RB[repeat][w][0], RB[repeat][w][1], 
+                        RC[w][0], RC[w][1]);
+            }
+
+        }
+    }
+
+    half * C_temp = C + warp_row * N + warp_col;
+    for (int w = 0 ; w < NUM_WARP; ++w){
+        
+        *((uint32_t *)(&C_temp[ (lane_id / 4 + warp_id * MMA_M) * N + w * MMA_N]) + lane_id % 4) = RC[w][0];
+        *((uint32_t *)(&C_temp[ (lane_id / 4 + 8 + warp_id * MMA_M) * N + w * MMA_N]) + lane_id % 4) = RC[w][1];
+    }
+
+
+
+}
+
+template <int NUM_WARP, int REPEATK>
+void mmaNaiveREPEATK(half *A, half *B, half *C, size_t M, size_t N, size_t K, const int* ind, size_t lenind) {
+  
+    // 优化1 :  每一个warp   算 16 个矩阵的乘法
+    dim3 block(WARP_SIZE * NUM_WARP );
+    dim3 grid(div_ceil(N, MMA_N * NUM_WARP), div_ceil(M, MMA_M * NUM_WARP));
+
+    static size_t smem_max_size = (MMA_M * NUM_WARP + MMA_N * NUM_WARP) * (MMA_K * REPEATK) * sizeof(half);
+    mmaNaiveKernelRepeatK<NUM_WARP,REPEATK><<<grid, block, smem_max_size>>>(A, B, C, M, N, K, ind, lenind);
+
+}
+
+
+
+
+// totally dense compute
+torch::Tensor Mixgemm(
+    const torch::Tensor& ind,
+    size_t lenid,
+    const torch::Tensor& mat1, //fp16
+    const torch::Tensor& mat2  //fp16
+    ){
+  auto m = mat1.sizes()[0];
+  auto n = mat2.sizes()[0];
+  auto k = mat1.sizes()[1];
+
+  std::cout <<" k is" << k<<  std::endl;
+std::cout <<" k is" << m<<  std::endl;
+std::cout <<" k is" << n<<  std::endl;
+
+
+  auto options = torch::TensorOptions().dtype(torch::kFloat16).device(mat1.device());  
+  at::Tensor input = torch::zeros({m, n}, options);
+
+  half* input_ptr = (half *)input.data_ptr<at::Half>();
+  half* mat1_ptr = (half *)mat1.data_ptr<at::Half>();
+  half* mat2_ptr = (half *)mat2.data_ptr<at::Half>();
+  int* ind_ptr = (int *)ind.data_ptr<int>();
+
+    
+         mmaNaiveop3(mat1_ptr, mat2_ptr, input_ptr, m, n, k, ind_ptr, lenid);
+//   if (lenid < 8){
+//         // need to be optimized
+//         mmaNaiveop3(mat1_ptr, mat2_ptr, input_ptr, m, n, k, ind_ptr, lenid);
+//   }
+//   else {
+//         
+//   }
+  //mmaNaiveREPEATK<4,2>  (mat1_ptr, mat2_ptr, input_ptr, m, n, k, ind_ptr, lenid);  
+  //mmaNaiveSqureWarp<2>(mat1_ptr, mat2_ptr, input_ptr, m, n, k, ind_ptr, lenid);
+   
+  return input;
 }

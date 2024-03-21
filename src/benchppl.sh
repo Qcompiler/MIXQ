@@ -1,22 +1,15 @@
 
 
-CMD="srun -p twills -A h100 --gres=gpu:h100:1"
-
+CMD="python"
+bashpath=/data/chenyidong/checkpoint
 set -x
-for batch in    512
+for batch in    256
     do
     for seq in   64  
         do
 
-            # llama 70 B
-            # CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 ${CMD} python evalppl.py \
-            # --fp_features_num 128 --model_type mix --model_path /home/dataset/llama-2/Llama-2-70b-hf  \
-            # --quant_file /home/dataset/llama-2/Llama-2-70b-hf --n_ctx $batch --n_batch $batch --eval_accuracy True
-            # CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 ${CMD} python evalppl.py \
-            # --fp_features_num 128 --model_type mix --model_path /home/dataset/llama-2/Llama-2-70b-hf  \
-            # --quant_file /home/dataset/llama-2/Llama-2-70b-hf --n_ctx $batch --n_batch $batch --eval_throughput True
-            
-            for model in 7  
+
+            for model in 13  
                 do
 
                 echo ${model}
@@ -43,17 +36,25 @@ for batch in    512
                 
                 #ppl mix
 
-
+                CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 ${CMD} \
+                benchppl.py  --model_type fp16 --model_path  \
+                ${bashpath}/Llama-2-${model}b \
+                --quant_file  /home/dataset/llama-2/checkpoint/Llama-2-${model}b
                                 
                 CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 ${CMD} \
-                python demo.py  --model_type bitsandbytesfp16 --model_path  \
-                /home/dataset/llama-2/checkpoint/Llama-2-${model}b-hf \
-                --quant_file  /home/dataset/llama-2/checkpoint/Llama-2-${model}b-hf 
+                benchppl.py  --model_type bitsandbytesfp16 --model_path  \
+                ${bashpath}/Llama-2-${model}b \
+                --quant_file  /home/dataset/llama-2/checkpoint/Llama-2-${model}b 
 
 
                 CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 ${CMD} \
-                python demo.py  --model_type mix --model_type mix --model_path  \
-                /home/dataset/llama-2/checkpoint/Llama-2-${model}b-hf --quant_file  /home/chenyidong/quant/Llama-2-${model}b-hf
+                benchppl.py  --model_type mix --model_type mix --model_path  \
+                ${bashpath}/Llama-2-${model}b --quant_file  /home/chenyidong/quant/Llama-2-${model}b
+
+
+                CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 ${CMD} \
+                benchppl.py  --model_type mix --model_type awq --model_path  \
+                ${bashpath}/Llama-2-${model}b --quant_file  /home/chenyidong/quant/Llama-2-${model}b
 
                 #CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890 python  evalppl.py --fp_features_num 128 --model_type mix --model_path /data/chenyidong/llama/Baichuan2-${model}B-Base --quant_file /data/chenyidong/llama/Baichuan2-${model}B-Base --n_ctx $batch --n_batch $batch
 

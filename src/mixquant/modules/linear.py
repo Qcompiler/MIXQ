@@ -144,14 +144,11 @@ class MixLinear_GEMM(nn.Module):
             self.weight_cache = self.ExtractFP16weight()  
         #print("after get ind",torch.cuda.memory_allocated()/1024/1024 - memory)
 
-        if len(self.ind):
-             
+
+        if len(self.ind):  
             cache.activation_outliers = mixlib.ExtractOutliersAndSetToZeros(self.ind,inputs)
             outliers_fp16 = torch.mm( cache.activation_outliers ,  self.weight_cache.T)
- 
-            
-        else:
-            outliers_fp16 =  None
+
 
 
 
@@ -167,10 +164,11 @@ class MixLinear_GEMM(nn.Module):
                 activation_outliers = mixlib.ExtractOutliersAndSetToZeros(ind,inputs)
    
                 weight_cache = self.q_weight[:,ind].to(torch.float16) *  self.scale_col.T
-                if outliers_fp16 is None:
-                    outliers_fp16 = torch.mm( activation_outliers ,weight_cache.T  )
-                else:
+                if len(self.ind):
+                    
                     outliers_fp16 = outliers_fp16 + torch.mm( activation_outliers ,weight_cache.T  )
+                else:
+                    outliers_fp16 = torch.mm( activation_outliers ,weight_cache.T  )
                 self.q_weight[:,ind] *= 0
                 if len(self.ind) == 0:
                     cache.activation_outliers = activation_outliers
@@ -182,7 +180,8 @@ class MixLinear_GEMM(nn.Module):
 
                 cache.q_xcache = mixlib.FindRowScale(inputs,cache.x_scale, M, self.in_features)
                 #cache.x_scale = torch.max(inputs.abs(),dim=1)[0] / 127.0
- 
+                outliers_fp16 = torch.mm( cache.activation_outliers ,  self.weight_cache.T)
+                
             self.cnt += 1
             if self.cnt >= 10 or len(self.ind) > 256:
                 self.add_outliers = False
@@ -197,7 +196,7 @@ class MixLinear_GEMM(nn.Module):
         if self.arch == 9:
             y = mixlib.gemm(cache.q_xcache,self.q_weight,M, self.out_features, self.in_features)
             if len(self.ind):
-                outliers_fp16 = torch.mm( cache.activation_outliers ,  self.weight_cache.T)
+                
                 y1 = mixlib.dequantizeInt8(y, cache.x_scale, self.scale_col, outliers_fp16, 8, M, self.out_features)
                 
             else:
@@ -208,7 +207,7 @@ class MixLinear_GEMM(nn.Module):
             if len(self.ind):
                 
 
-                outliers_fp16 = torch.mm( cache.activation_outliers,  self.weight_cache.T)
+                
                 y1 = mixlib.int8FusedDequantize(cache.q_xcache, 
                                                         self.q_weight, 
                                                         cache.x_scale,

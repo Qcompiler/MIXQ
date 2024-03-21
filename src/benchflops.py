@@ -126,7 +126,7 @@ def generate(model, tokens, n_generate, batch_size, cache):
     #print(generate_time)
     return  generate_time
 
-def run_round(model_path, quant_file, n_generate, token, batch_size, safetensors, model_type='fp16',cache=None):
+def run_round(model_path, quant_file, n_generate, token, batch_size, safetensors, model_type='fp16',mixlibcache=None):
     if model_type == 'mix':
         from mixquant import AutoForCausalLM
         model = AutoForCausalLM.from_quantized(
@@ -134,7 +134,7 @@ def run_round(model_path, quant_file, n_generate, token, batch_size, safetensors
             max_new_tokens=n_generate, batch_size=batch_size,
             safetensors=safetensors,
             mix = True,
-            cache = cache
+            cache = mixlibcache
         )
 
 
@@ -153,7 +153,7 @@ def run_round(model_path, quant_file, n_generate, token, batch_size, safetensors
             device_map='auto', trust_remote_code=True
         )
         
-        model = model.to('cuda')
+
 
     if model_type == 'bitsandbytes':
         from transformers import AutoModelForCausalLM
@@ -164,13 +164,126 @@ def run_round(model_path, quant_file, n_generate, token, batch_size, safetensors
         trust_remote_code=True,
         max_memory=f'{int(torch.cuda.mem_get_info()[0]/1024**3)-2}GB')
 
+
+
+    if model_type == 'quik':
+        args.fp_features_num = 256
+        sys.path.append("/home/chenyidong/quant/QUIK/experiments")
+        def get_fp_features_num(module: torch.nn.Linear, args):
+            fp_features_num = args.fp_features_num
+            return fp_features_num
+        def llama_replace_with_kernels(model, args):
+            import modelutils
+            import quant_sim
+            import qlinear
+            layers = model.model.layers
+            shared_inputs = {}
+
+            print("Replace with INT4 kernels.")
+            for i in range(len(layers)):
+                opt_block = layers[i]
+                sequential = [
+                    ['self_attn.k_proj', 'self_attn.v_proj', 'self_attn.q_proj'],
+                    ['self_attn.o_proj'],
+                    ['mlp.up_proj', 'mlp.gate_proj'],
+                    ['mlp.down_proj']
+                ]
+                full = modelutils.find_layers(opt_block)
+                for j, layer_group in enumerate(sequential):
+                    subset = {n: full[n] for n in layer_group}
+                    shared_inputs[f"{i}.{j}"] = qlinear.SharedQuantizedInput(len(layer_group))
+                    for name in subset:
+                        layer = subset[name]
+                        if 'lm_head' in name or 'rotary_emb' in name:
+                            continue
+                        is_quantized = False
+                        bits = 16
+                        fp_features = 0
+
+                        if isinstance(layer, quant_sim.ActQuantWrapper):
+                            if layer.quantizer.configured:
+                                is_quantized = True
+                                bits = layer.quantizer.bits
+                                fp_features = layer.fp_features_num
+                            layer = layer.module
+                        layer_weight = layer.weight.data
+
+                        layer_scale = save_dict['model.layers.{}.{}.scale'.format(i, name)]
+                        if fp_features == 0:
+                            fp_feature_idx = None
+                        else:
+                            print('---------------save  act_scales----------------')
+                            layer_act_scales = act_scales['model.layers.{}.{}'.format(i, name)]
+                            fp_feature_idx = torch.sort(layer_act_scales)[1][-fp_features:]
+
+                        if is_quantized:
+                            int_mod = qlinear.MixedQLinear.from_float(layer, layer_weight, layer_scale,
+                                                                    shared_inputs[f"{i}.{j}"], fp_feature_idx,
+                                                                    bits=bits)
+                        else:
+                            int_mod = layer
+                        modelutils.replace_single_mod_opt(opt_block, name, int_mod)
+
+
+
+        import modelutils, quant_sim  
+        model = modelutils.get_llama(args.model_path, args.batch_size, "")
+        print("Load quantized model from ", args.quant_file)
+        save_dict = torch.load(args.quant_file)
+        model.load_state_dict(save_dict["model"])   
+        model.config.use_cache = True
+        model = model.to('cuda')
+        cache = {'past': None}
+        def clear_past(i):
+            def tmp(layer, inp, out):
+                if cache['past']:
+                    cache['past'][i] = None
+            return tmp
+        for i, layer in enumerate(model.model.layers):
+            layer.register_forward_hook(clear_past(i))        
+
+        
+        relative_path = "/home/chenyidong/quant/QUIK/experiments/act_scales/{}.pt".format(args.model_path.split('/')[-1])
+
+        print(relative_path)
+        act_scales = torch.load(relative_path)
+
+
+ 
+        quant_sim.add_actquant(model)
+        layers = modelutils.find_layers(model)
+
+        for name in layers:
+            
+            bits = 4
+            if 'lm_head' in name or "rotary_emb" in name:
+                print(f'Skipping {name}\n')
+                continue 
+            
+            
+            if 'down_proj' in name:
+                bits = 8       
+            
+            if args.fp_features_num > 0 :
+                fp_features_num = get_fp_features_num(layers[name].module, args)
+                if "qkv" in name:
+                    act_name = name.replace("qkv", "q")
+                else:
+                    act_name = name
+                layers[name].fp_features_configure(act_scales[act_name], fp_features_num)
+            layers[name].quantizer.configure(bits=bits)
+
+        llama_replace_with_kernels(model, args)    
+        model = model.to('cuda')
+
+
     print(f" -- Warming up...")
     warmup(model)
 
     print(f" -- Generating {n_generate} tokens,  in context...")
 
     try:
-        generate_time = generate(model, token, n_generate, batch_size, cache)
+        generate_time = generate(model, token, n_generate, batch_size, mixlibcache)
         successful_generate = True
     except RuntimeError as ex:
         if 'cuda out of memory' in str(ex).lower():

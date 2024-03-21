@@ -1,7 +1,5 @@
 #include <pybind11/pybind11.h>
 
- 
-#include <cublasLt.h>
 #include<vector>
 #include "ops.cuh"
 
@@ -199,6 +197,12 @@ torch::Tensor dequantizeInt8Silu(const torch::Tensor &x, const torch::Tensor &sc
 torch::Tensor FindRowScale(  const torch::Tensor &x,  torch::Tensor &scaleRow,
                          int rows, int cols) ;
 
+std::vector<torch::Tensor>
+ FindRowScaleFusedExtracOutliers(  torch::Tensor &x,  torch::Tensor &scaleRow,
+                         const torch::Tensor & ind,  int len_ind,
+                         int rows, int cols) ;
+
+
 void layernorm_forward_cuda(torch::Tensor _input, torch::Tensor _gamma, torch::Tensor _out, float eps);
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("cigemmlt_ampere_32", &cigemmlt_ampere_32, "cigemmlt_ampere_32");
@@ -253,5 +257,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("FindRowScale", &FindRowScale,
         "FindRowScale");  
-
+    m.def("FindRowScaleFusedExtracOutliers", &FindRowScaleFusedExtracOutliers,
+        "FindRowScaleFusedExtracOutliers");  
 }

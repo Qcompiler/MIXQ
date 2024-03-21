@@ -6,7 +6,7 @@ torch.manual_seed(0)
 from mixquant.Cache import MixLibCache
 cache = MixLibCache()
 import mixlib
-M = 512
+M = 32
 N = 12288
 inputs = torch.randn((M,N),dtype=torch.float16,device='cuda')
 

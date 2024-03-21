@@ -72,7 +72,20 @@ def llama_replace_with_kernels(model, args):
 
 
 
+from transformers import AutoTokenizer, TextStreamer
+def promot(model, tokenizer):
+    text = 'Hamburg is in which country?\n'
+    input_ids = tokenizer(text, return_tensors="pt").input_ids
+    input_ids = input_ids.cuda()
+    free_in_GB = int(torch.cuda.mem_get_info()[0]/1024**3)
+    max_memory = f'{int(torch.cuda.mem_get_info()[0]/1024**3)-2}GB'
 
+    n_gpus = torch.cuda.device_count()
+    max_memory = {i: max_memory for i in range(n_gpus)}
+
+
+    generated_ids = model.generate(input_ids, max_length=512)
+    print(tokenizer.decode(generated_ids[0], skip_special_tokens=True))
 
 
 if __name__ == "__main__":
@@ -113,33 +126,16 @@ if __name__ == "__main__":
     parser.add_argument("--trust_remote_code", action="store_true", help="Whether to use remote code")
     parser.add_argument("--disable_exllama", action="store_true", help="Whether to use disable exllama kernel")
 
-    parser.add_argument('--a_bits', type=int, default=4, choices=[4, 8, 16])
-
-    # Weight Quantization Params: 
-    parser.add_argument('--w_bits', type=int, default=16, choices=[4, 8, 16])
-    parser.add_argument('--w_clip', action='store_true', help='Use clipping for weight quantization')
-    parser.add_argument('--w_asym', action='store_true')
-    
-    parser.add_argument('--int8_down_proj', action='store_true', help='Use INT8 for Down Projection')
-    parser.add_argument('--fp_features_frac', type=float, default=None, help='Fraction of features to keep in FP16.')    
-    parser.add_argument("--fp_features_num", type=int, default=1, help="outliers")
-
-    parser.add_argument('--eval_accuracy', type=bool, default=True)
-    parser.add_argument('--eval_throughput', type=bool, default=False)
-
 
     args = parser.parse_args()
     
-    if args.eval_throughput is True:
-        args.eval_accuracy = False
 
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, use_fast=args.use_fast_tokenizer, trust_remote_code=True)
     if not tokenizer.pad_token_id:
         tokenizer.pad_token_id = tokenizer.eos_token_id
-    ppl = Perplexity(None, tokenizer, args.dataset_path, args.dataset_name, args.split, args.text_column, args.eval_accuracy)
-   
+
  
     model_path = args.model_path
     quant_file = args.quant_file
@@ -155,53 +151,9 @@ if __name__ == "__main__":
         )
         
         model = model.to('cuda')
-        print(model)
 
-    if args.model_type == 'bitsandbytesmix4':
-        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-        print(f" -- Loading model  mix4...")
-    
-        n_gpus = torch.cuda.device_count()
-        max_memory = f'{int(torch.cuda.mem_get_info()[0]/1024**3)-2}GB'
-        max_memory = {i: max_memory for i in range(n_gpus)}
-        quantization_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        llm_int4_threshold=6.0,
-        llm_int4_has_fp16_weight=False,
-        )
-        model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        device_map='auto',
-        max_memory=max_memory,
-        quantization_config=quantization_config
-        )
-    if args.model_type == 'bitsandbytes':
-        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-        print(f" -- Loading model mix bit8...")
-    
-        n_gpus = torch.cuda.device_count()
-        max_memory = f'{int(torch.cuda.mem_get_info()[0]/1024**3)-2}GB'
-        max_memory = {i: max_memory for i in range(n_gpus)}
-        quantization_config = BitsAndBytesConfig(
-        load_in_8bit=True,
-        llm_int8_threshold=6.0,
-        llm_int8_has_fp16_weight=False,
-        )
-        model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        device_map='auto',
-        max_memory=max_memory,
-        quantization_config=quantization_config
-        )
 
- 
-    if args.model_type == 'awq':
-        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-        print(f" -- Loading model  awq...")
-        sys.path.append("/home/chenyidong/quant/AutoAWQ")
 
-        from awq import AutoAWQForCausalLM        
-        model = AutoAWQForCausalLM.from_quantized(model_path, quant_file, fuse_layers=True, mix = False)
 
 
     if args.model_type == 'mix':
@@ -213,8 +165,16 @@ if __name__ == "__main__":
         model = AutoForCausalLM.from_quantized(
             model_path, quant_file, fuse_layers=True,
             mix = True,  cache = cache
-        )         
- 
+        )  
+
+    if args.model_type == 'awq':
+        print(f" -- Loading model awq...")
+        from awq import AutoAWQForCausalLM
+        model = AutoAWQForCausalLM.from_quantized(
+            model_path, quant_file, fuse_layers=True,
+            max_new_tokens=n_generate, batch_size=batch_size,
+            safetensors=safetensors
+        )
     if args.model_type == 'fp16':    
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
         model = AutoModelForCausalLM.from_pretrained(
@@ -222,70 +182,17 @@ if __name__ == "__main__":
             device_map='auto', trust_remote_code=True
         )
         
-        #model = model.to('cuda')
-
-    if args.model_type == 'QUIK':
-        import modelutils    
-        model = modelutils.get_llama(args.model_path, args.n_ctx, "")
-        print("Load quantized model from ", args.quant_file)
-        save_dict = torch.load(args.quant_file)
-        model.load_state_dict(save_dict["model"])   
-        model.config.use_cache = True
         model = model.to('cuda')
-        cache = {'past': None}
-        def clear_past(i):
-            def tmp(layer, inp, out):
-                if cache['past']:
-                    cache['past'][i] = None
-            return tmp
-        for i, layer in enumerate(model.model.layers):
-            layer.register_forward_hook(clear_past(i))        
 
-        
-        relative_path = "/home/chenyidong/quant/QUIK/experiments/act_scales/{}.pt".format(args.model_path.split('/')[-1])
+    text = 'Hamburg is in which country?\n'
+    tokens = tokenizer.encode_plus(text)['input_ids']
+    tokens = torch.tensor(tokens)[None,].to('cuda')
+    stop_tokens = ["###", "[UNK]", "</s>"]
+    with torch.no_grad():
+        out = model.generate(tokens, do_sample=True, max_length=512, 
+                             bad_words_ids=[[tokenizer.encode(token)[0] for token in stop_tokens]])[0]
+        out = tokenizer.decode(out.cpu().numpy().tolist())
+        print(out)
 
-        print(relative_path)
-        act_scales = torch.load(relative_path)
-
-
-
-        quant_sim.add_actquant(model)
-        layers = modelutils.find_layers(model)
-
-        for name in layers:
-            
-            bits = args.a_bits
-            if 'lm_head' in name or "rotary_emb" in name:
-                print(f'Skipping {name}\n')
-                continue 
-            
-            
-            if 'down_proj' in name:
-                if args.int8_down_proj:
-                    bits = 8       
-            
-            if args.fp_features_num > 0 or args.fp_features_frac is not None:
-                fp_features_num = get_fp_features_num(layers[name].module, args)
-                if "qkv" in name:
-                    act_name = name.replace("qkv", "q")
-                else:
-                    act_name = name
-                layers[name].fp_features_configure(act_scales[act_name], fp_features_num)
-            layers[name].quantizer.configure(bits=bits)
-
-        llama_replace_with_kernels(model, args)    
-        model = model.to('cuda')
-    print(model)
-    ppl = Perplexity(model, tokenizer, args.dataset_path, args.dataset_name, args.split, args.text_column, args.eval_accuracy)
-    allppl = ppl.calculate_perplexity(args.n_ctx, args.n_batch)
-
-    data = pd.DataFrame(allppl)
-    try:
-        os.mkdir("output")
-    except:
-        pass
-    data.to_csv("output/ppl_batchsize"+str(args.n_ctx)+"_"+args.model_type+"_"+model_path.split('/')[-1]+".csv" + str(args.fp_features_num))
-
-    
 
 

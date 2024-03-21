@@ -6,6 +6,7 @@ weight_only_map = {
     "AquilaForCausalLM":  ["o_proj","down_proj"],
     "BaichuanForCausalLM": ["o_proj","down_proj"],
     "MistralForCausalLM": ["o_proj","down_proj"],
+    "FalconForCausalLM" :  ["out_proj", "fc_out"]
 }
 
 def get_named_linears(module):

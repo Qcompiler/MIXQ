@@ -22,7 +22,7 @@ def benchmark(args):
 
             def run_benchmark(module):
                 num_bench_steps = 100
-                for i in range(10):
+                for i in range(20):
                     out = module(x)
                 start_time = time.perf_counter()
                 torch.cuda.synchronize()
@@ -41,7 +41,6 @@ def benchmark(args):
 
             mix_mod =  MixLinear_GEMM.from_linear(baseline_mod,False,False,cache)
             
-            baseline_mod.weight.data = torch.randint_like(baseline_mod.weight.data, low=-2, high=1).to(dtype)
             fp_indices = torch.randperm(feature_dim_in)[:fp_features_num]
             s_w = torch.ones((feature_dim_out, 1), dtype=dtype, device='cuda')
             int8_mod = MixedQLinear.from_float(baseline_mod,
