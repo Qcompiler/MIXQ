@@ -52,4 +52,4 @@ torch::Tensor int8SpFusedDequantizeCUDA(const torch::Tensor &A,
                                         const torch::Tensor &scale_col,
                                         const torch::Tensor &y);
 
-}  // namespace QUIK::symmetric
+}   

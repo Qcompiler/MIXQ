@@ -175,12 +175,25 @@ torch::Tensor int8FusedDequantize(const torch::Tensor &A,
                                   const torch::Tensor &scale_col,
                                   const torch::Tensor &y, int m, int n, int k);
 
+
 torch::Tensor int8FusedDequantizeSilu(const torch::Tensor &A,
                                   const torch::Tensor &B,
                                   const torch::Tensor &scale_row,
                                   const torch::Tensor &scale_col,
                                   const torch::Tensor &y, int m, int n, int k);
 
+
+
+torch::Tensor int4FusedDequantize(const torch::Tensor &A,
+                                  const torch::Tensor &B,
+                                  const torch::Tensor &scale_row,
+                                  const torch::Tensor &scale_col,
+                                  const torch::Tensor &y, int m, int n, int k);
+torch::Tensor int4FusedDequantizeSilu(const torch::Tensor &A,
+                                  const torch::Tensor &B,
+                                  const torch::Tensor &scale_row,
+                                  const torch::Tensor &scale_col,
+                                  const torch::Tensor &y, int m, int n, int k);
 
 torch::Tensor dequantizeInt8(const torch::Tensor &x, const torch::Tensor &scaleRow,
                          const torch::Tensor &scaleCol, const torch::Tensor &y,
@@ -195,13 +208,35 @@ torch::Tensor dequantizeInt8Silu(const torch::Tensor &x, const torch::Tensor &sc
                          const int bits, int M, int N);
 
 torch::Tensor FindRowScale(  const torch::Tensor &x,  torch::Tensor &scaleRow,
-                         int rows, int cols) ;
+                         int rows, int cols, int bit) ;
+
+
+torch::Tensor packInt4ToFp16(const torch::Tensor & weight, 
+                            const torch::Tensor & scale,
+                            const torch::Tensor & ind);
+
+torch::Tensor unpack_int4_to_fp16(const torch::Tensor & weight, 
+                            const torch::Tensor & ind);
+
+
 
 std::vector<torch::Tensor>
  FindRowScaleFusedExtracOutliers(  torch::Tensor &x,  torch::Tensor &scaleRow,
                          const torch::Tensor & ind,  int len_ind,
                          int rows, int cols) ;
 
+
+
+torch::Tensor aint4FusedDequantize(
+    const torch::Tensor &A, const torch::Tensor &B,
+    const torch::Tensor &scale_row, const torch::Tensor &scale_col,
+    const float shift_value, const torch::Tensor &zero_row,
+    const torch::Tensor &w_reduced, const torch::Tensor &y);
+torch::Tensor aint4FusedDequantizeSilu(
+    const torch::Tensor &A, const torch::Tensor &B,
+    const torch::Tensor &scale_row, const torch::Tensor &scale_col,
+    const float shift_value, const torch::Tensor &zero_row,
+    const torch::Tensor &w_reduced, const torch::Tensor &y);
 
 void layernorm_forward_cuda(torch::Tensor _input, torch::Tensor _gamma, torch::Tensor _out, float eps);
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -227,6 +262,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("elementWiseQuantInt8CStyle", &elementWiseQuantInt8CStyle, "elementWiseQuantInt8CStyle");
     m.def("ExtractOutliers", &ExtractOutliers, "ExtractOutliers");
     m.def("FindOutliers", &FindOutliers, "FindOutliers");
+    m.def("packInt4ToFp16", &packInt4ToFp16, "packInt4ToFp16");
+    
     m.def("FindOutliersRow", &FindOutliersRow, "FindOutliersRow");
     m.def("ExtractOutliersAndSetToZeros", &ExtractOutliersAndSetToZeros, "ExtractOutliersAndSetToZeros");
 
@@ -240,8 +277,18 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("Int8quantize", &Int8quantize, "Int8quantize");
     m.def("int8FusedDequantize", &int8FusedDequantize,
         "int8FusedDequantize");
+    m.def("int4FusedDequantize", &int4FusedDequantize,
+        "int4FusedDequantize");
+    m.def("aint4FusedDequantize", &aint4FusedDequantize,
+        "aint4FusedDequantize");
+
     m.def("int8FusedDequantizeSilu", &int8FusedDequantizeSilu,
         "int8FusedDequantizeSilu");
+    m.def("int4FusedDequantizeSilu", &int4FusedDequantizeSilu,
+        "int4FusedDequantizeSilu");      
+    m.def("aint4FusedDequantizeSilu", &aint4FusedDequantizeSilu,
+        "aint4FusedDequantizeSilu");  
+    
 
     m.def("layernorm_forward_cuda", &layernorm_forward_cuda,
         "layernorm_forward_cuda");
@@ -250,6 +297,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "dequantizeInt8");
     m.def("dequantizeInt8Silu", &dequantizeInt8Silu,
         "dequantizeInt8Silu");
+    m.def("unpack_int4_to_fp16", &unpack_int4_to_fp16,
+        "unpack_int4_to_fp16");
 
 
     m.def("linear_a8_w8_b32_o32", &linear_a8_w8_b32_o32,

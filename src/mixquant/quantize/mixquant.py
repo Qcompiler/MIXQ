@@ -20,6 +20,7 @@ class MixQuantizer:
 
         self.group_size = group_size
         self.version = version
+        self.w_bit = w_bit
 
         self.modules, self.module_kwargs= self.init_quant()
     def init_quant(self, n_samples=128, seqlen=512):
@@ -69,12 +70,12 @@ class MixQuantizer:
             clear_memory()
 
             # Quantize weights
-            self._apply_quant(self.modules[i], named_linears, weight_only)
+            self._apply_quant(self.modules[i], named_linears, weight_only, layer = i)
             clear_memory()
+ 
 
 
-
-    def _apply_quant(self, module, named_linears: Dict[str, nn.Linear], weight_only_):
+    def _apply_quant(self, module, named_linears: Dict[str, nn.Linear], weight_only_, layer):
 
         
         if isinstance(self.model.config.architectures,list):
@@ -102,14 +103,21 @@ class MixQuantizer:
                     weight_only = True
                     break
 
+            relative_path = "act_scales/Llama-2-13b-hf.pt"
+            act_scales = torch.load(relative_path)
+            layer_scales = act_scales['model.layers.{}.{}'.format(layer, name)]
+
 
             q_linear = q_linear_module.from_linear(
                 linear=linear_layer,
                 weight_only = weight_only,
-                init_only=False
+                init_only=False,
+                bit = self.w_bit,
+                layer_scales = layer_scales
             )
 
             linear_layer.cpu()
 
             set_op_by_name(module, name, q_linear)
             clear_memory()
+ 

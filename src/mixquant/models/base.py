@@ -41,7 +41,7 @@ class BaseForCausalLM(nn.Module):
                        split="train", text_column="text"):
         self.quant_config = quant_config
         quant_config["version"] = "MIX"
-        quant_config["q_group_size"] = 128
+        quant_config["q_group_size"] = 0
         from  mixquant.quantize.mixquant import MixQuantizer
 
         quantizer = MixQuantizer(
@@ -149,7 +149,7 @@ class BaseForCausalLM(nn.Module):
             self, model_path, model_filename, safetensors, version, 
             trust_remote_code, max_new_tokens=max_new_tokens
         )
-
+        self.quant_config = quant_config
         # [STEP 3] Load model
         with init_empty_weights():
             model = AutoModelForCausalLM.from_config(config=config, torch_dtype=torch_dtype, trust_remote_code=trust_remote_code)
@@ -223,7 +223,8 @@ class BaseForCausalLM(nn.Module):
                 quant_config = json.loads(file.read())
         else:
             print("use oneline quant methods")
-            quant_config = {"w_bit": 8, "version": version}
+            quant_config = {"w_bit": 0, "version": version}
+        
         
         # Load model config and set max generation length
         if max_new_tokens is None and hasattr(self, 'max_new_tokens_key'):
@@ -267,11 +268,14 @@ class BaseForCausalLM(nn.Module):
                     if key in  name:
                         weight_only = True
                         break
+
                 q_linear =  MixLinear_GEMM.from_linear(module,
+                                           bit =  self.quant_config['w_bit'],
                                            weight_only = weight_only, 
                                            init_only = True,
                                            cache = MixGemmcache)
 
+ 
                 q_linear.to(next(layer.parameters()).device)
                 set_op_by_name(layer, name, q_linear)
 

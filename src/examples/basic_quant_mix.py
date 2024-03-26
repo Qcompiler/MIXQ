@@ -11,11 +11,12 @@ import argparse
 parser = argparse.ArgumentParser(description="Calculate Perplexity for a model.")
 parser.add_argument("--model_path", type=str,   help="Model path")
 parser.add_argument("--quant_file", type=str,   help="quant_file Model path")
+parser.add_argument("--w_bit", type=int, default=8,  help="weight bit")
 args = parser.parse_args()
 
 model_path = args.model_path
 quant_path = args.quant_file
-quant_config = { "w_bit": 8, "version": "MIX" }
+quant_config = { "w_bit": args.w_bit, "version": "MIX" }
 print(quant_path)
 # Load model
 # NOTE: pass safetensors=True to load safetensors

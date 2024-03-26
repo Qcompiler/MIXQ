@@ -1,11 +1,11 @@
 
 
-CMD=" srun  -N 1 --pty --gres=gpu:a100:1 -p octave -A public python "
+CMD=" srun  -N 1 --pty --gres=gpu:a100:2 -p octave -A public python "
 export http_proxy=127.0.0.1:7890 
 export https_proxy=127.0.0.1:7890
 set -x
 
-for batch in   32 64 128 256 512 
+for batch in   512 
     do
     for seq in   64  
         do
@@ -17,22 +17,8 @@ for batch in   32 64 128 256 512
             model_type=Llama-2
             
             
-            models=(     "vicuna-33b"  ) 
-            # data_types=( "mix"  )
-            # for data_type in "${data_types[@]}"
-            #     do
-            #     for model in "${models[@]}"
-            #         do
-            #         echo ${model}          
-            #         CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890  \
-            #         ${CMD} benchflops.py  --model_type ${data_type} --model_path  \
-            #         /mnt/octave/data/chenyidong/checkpoint/quant/${model} \
-            #         --quant_file /mnt/octave/data/chenyidong/checkpoint/quant/${model} --batch_size ${batch}
-
-
-            #     done
-            # done 
-            data_types=(  "fp16" "bitsandbytes"  )
+            models=(     "Llama-2-7b"  ) 
+            data_types=( "mix"  )
             for data_type in "${data_types[@]}"
                 do
                 for model in "${models[@]}"
@@ -40,24 +26,38 @@ for batch in   32 64 128 256 512
                     echo ${model}          
                     CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890  \
                     ${CMD} benchflops.py  --model_type ${data_type} --model_path  \
-                    /mnt/octave/data/chenyidong/checkpoint/${model} \
-                    --quant_file /mnt/octave/data/chenyidong/checkpoint/${model} --batch_size ${batch}
-
+                    /mnt/octave/data/chenyidong/checkpoint/quant4bit/${model} \
+                    --quant_file /mnt/octave/data/chenyidong/checkpoint/quant4bit/${model} --batch_size ${batch} --bit 4
 
                 done
-            done
-            data_types=( "awq"   )
-            for data_type in "${data_types[@]}"
-                do
-                for model in "${models[@]}"
-                    do
-                    echo ${model}
-                    CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890  \
-                    ${CMD} benchflops.py  --model_type ${data_type} --model_path  \
-                    /mnt/octave/data/chenyidong/checkpoint/awqquant/${model} \
-                    --quant_file /mnt/octave/data/chenyidong/checkpoint/awqquant/${model} --batch_size ${batch}
-                done
-            done
+            done 
+            
+            # data_types=(  "fp16" "bitsandbytes"  )
+            # for data_type in "${data_types[@]}"
+            #     do
+            #     for model in "${models[@]}"
+            #         do
+            #         echo ${model}          
+            #         CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890  \
+            #         ${CMD} benchflops.py  --model_type ${data_type} --model_path  \
+            #         /mnt/octave/data/chenyidong/checkpoint/${model} \
+            #         --quant_file /mnt/octave/data/chenyidong/checkpoint/${model} --batch_size ${batch}
+
+
+            #     done
+            # done
+            # data_types=( "awq"   )
+            # for data_type in "${data_types[@]}"
+            #     do
+            #     for model in "${models[@]}"
+            #         do
+            #         echo ${model}
+            #         CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890  \
+            #         ${CMD} benchflops.py  --model_type ${data_type} --model_path  \
+            #         /mnt/octave/data/chenyidong/checkpoint/awqquant/${model} \
+            #         --quant_file /mnt/octave/data/chenyidong/checkpoint/awqquant/${model} --batch_size ${batch}
+            #     done
+            # done
 
 
          

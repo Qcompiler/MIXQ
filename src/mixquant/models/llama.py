@@ -105,20 +105,40 @@ class LlamaFuser:
             qkv_layer = MixLinear_GEMM(q_proj.in_features,q_proj.out_features + k_proj.out_features + v_proj.out_features,
                                         q_proj.bias is not None,
                                         next(iter(module.state_dict().values())).device,
-                                        False,
-                                        cache)
+                                        bit = self.quant_config['w_bit'],
+                                        weight_only=False,
+                                        cache=cache)
 
 
         
         if isinstance(qkv_layer, MixLinear_GEMM):
             shapew = qkv_layer.q_weight.shape
-            qkv_layer.q_weight = torch.cat([q_proj.q_weight, k_proj.q_weight, v_proj.q_weight], dim=0)
-            qkv_layer.scale_col = torch.cat([q_proj.scale_col, k_proj.scale_col, v_proj.scale_col], dim=1)
+            
+            if qkv_layer.weight_only:
+                qkv_layer.q_weight = torch.cat([q_proj.q_weight, k_proj.q_weight, v_proj.q_weight], dim=1)
+                qkv_layer.scale_col = torch.cat([q_proj.scale_col, k_proj.scale_col, v_proj.scale_col], dim=0)
+                
+            else:
+                qkv_layer.q_weight = torch.cat([q_proj.q_weight, k_proj.q_weight, v_proj.q_weight], dim=0)
+                qkv_layer.scale_col = torch.cat([q_proj.scale_col, k_proj.scale_col, v_proj.scale_col], dim=1)
+                assert shapew[0] == qkv_layer.q_weight.shape[0]
+                assert shapew[1] == qkv_layer.q_weight.shape[1]
+                assert shapew[0] == qkv_layer.scale_col.shape[1]
+                assert 1 == qkv_layer.scale_col.shape[0]
+            if self.quant_config['w_bit'] == 4:
 
-            assert shapew[0] == qkv_layer.q_weight.shape[0]
-            assert shapew[1] == qkv_layer.q_weight.shape[1]
-            assert shapew[0] == qkv_layer.scale_col.shape[1]
-            assert 1 == qkv_layer.scale_col.shape[0]
+
+                
+                qkv_layer.fp_weight.copy_(torch.cat([q_proj.fp_weight, k_proj.fp_weight, v_proj.fp_weight], dim=0))
+      
+ 
+
+                qkv_layer.fp_indices.copy_(q_proj.fp_indices)
+
+
+  
+
+
 
             if q_proj.bias is not None:
                 raise NotImplementedError

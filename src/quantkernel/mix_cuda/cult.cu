@@ -1,6 +1,8 @@
 #include <iostream>
 #include <stdexcept>
 #include "common.h"
+#include "int4.h"
+#include "util.h"
 #include<cuda_fp16.h>
  
 #define BLOCK_ROWS 256
@@ -1767,8 +1769,165 @@ torch::Tensor Int8quantize(const torch::Tensor &src, const torch::Tensor &scale)
 
 }
 
+#include "asymmetric/gemm/device/gemm_dequantsilu.h"
+#include "asymmetric/gemm/device/gemm_dequant.h"
+#include "asymmetric/asymmetric_internal.h"
 
+torch::Tensor aint4FusedDequantizeCUDASilu(
+    const torch::Tensor &A, const torch::Tensor &B,
+    const torch::Tensor &scale_row, const torch::Tensor &scale_col,
+    const float shift_value, const torch::Tensor &zero_row,
+    const torch::Tensor &w_reduced, const torch::Tensor &y) {
+  torch::checkAllSameGPU("aint4FusedDequantizeCUDASilu", {
+                                                    {A, "A", 0},
+                                                    {B, "B", 1},
+                                                    {scale_row, "scale_row", 2},
+                                                    {scale_col, "scale_col", 3},
+                                                    {zero_row, "zero_row", 4},
+                                                    {w_reduced, "w_reduced", 5},
+                                                    {y, "y", 5},
+                                                });
+  auto M = A.size(0);
+  auto N = B.size(0);
+  auto K = A.size(1) * kElementsPerVector;
+  auto D = torch::empty({M, N}, torch::dtype(torch::kF16).device(A.device()));
 
+  using Gemm = cutlass::gemm::device::asymmetric::GemmDequantSilu<
+      cutlass::int4b_t,                // ElementA
+      cutlass::layout::RowMajor,       // LayoutA
+      cutlass::int4b_t,                // ElementB
+      cutlass::layout::ColumnMajor,    // LayoutB
+      cutlass::half_t,                 // ElementOutput
+      cutlass::layout::RowMajor,       // LayoutOutput
+      int32_t,                         // ElementAccumulator
+      cutlass::arch::OpClassTensorOp,  // tag indicating Tensor Cores
+      cutlass::arch::Sm80  // tag indicating target GPU compute architecture
+      >;
+
+  Gemm gemmOp;
+
+  using GemmCoord = cutlass::gemm::GemmCoord;
+
+  typename Gemm::Arguments arguments{
+      {static_cast<GemmCoord::Index>(M), static_cast<GemmCoord::Index>(N),
+       static_cast<GemmCoord::Index>(K)},
+      {(cutlass::int4b_t *)A.data_ptr<uint8_t>(), K},
+      {(cutlass::int4b_t *)B.data_ptr<uint8_t>(), K},
+      {(cutlass::half_t *)y.data_ptr<torch::Half>(), N},
+      {(cutlass::half_t *)D.data_ptr<torch::Half>(), N},
+      {(cutlass::half_t *)scale_col.data_ptr<torch::Half>(), N},
+      {(cutlass::half_t *)scale_row.data_ptr<torch::Half>(), M},
+      {(cutlass::half_t *)zero_row.data_ptr<torch::Half>(), M},
+      {(cutlass::half_t *)w_reduced.data_ptr<torch::Half>(), N},
+      Gemm::ElementC(shift_value)};
+
+  auto status = gemmOp(arguments);
+
+  TORCH_CHECK(status == cutlass::Status::kSuccess,
+              cutlassGetStatusString(status))
+
+  return D;
+}
+
+torch::Tensor aint4FusedDequantizeSilu(
+    const torch::Tensor &A, const torch::Tensor &B,
+    const torch::Tensor &scale_row, const torch::Tensor &scale_col,
+    const float shift_value, const torch::Tensor &zero_row,
+    const torch::Tensor &w_reduced, const torch::Tensor &y) {
+  torch::checkAllContiguous("aint4FusedDequantizeSilu",
+                            {
+                                {A, "A", 0},
+                                {B, "B", 1},
+                                {scale_row, "scale_row", 2},
+                                {scale_col, "scale_col", 3},
+                                {zero_row, "zero_row", 4},
+                                {w_reduced, "w_reduced", 5},
+                                {y, "y", 5},
+                            });
+  torch::checkDeviceType("aint4FusedDequantizeSilu",
+                         {A, B, scale_row, scale_col, zero_row, w_reduced},
+                         at::DeviceType::CUDA);
+  return aint4FusedDequantizeCUDASilu(A, B, scale_row, scale_col, shift_value,
+                                 zero_row, w_reduced, y);
+}
+//------------------------------------------------------
+torch::Tensor aint4FusedDequantizeCUDA(
+    const torch::Tensor &A, const torch::Tensor &B,
+    const torch::Tensor &scale_row, const torch::Tensor &scale_col,
+    const float shift_value, const torch::Tensor &zero_row,
+    const torch::Tensor &w_reduced, const torch::Tensor &y) {
+  torch::checkAllSameGPU("aint4FusedDequantizeCUDA", {
+                                                    {A, "A", 0},
+                                                    {B, "B", 1},
+                                                    {scale_row, "scale_row", 2},
+                                                    {scale_col, "scale_col", 3},
+                                                    {zero_row, "zero_row", 4},
+                                                    {w_reduced, "w_reduced", 5},
+                                                    {y, "y", 5},
+                                                });
+  auto M = A.size(0);
+  auto N = B.size(0);
+  auto K = A.size(1) * kElementsPerVector;
+  auto D = torch::empty({M, N}, torch::dtype(torch::kF16).device(A.device()));
+
+  using Gemm = cutlass::gemm::device::asymmetric::GemmDequant<
+      cutlass::int4b_t,                // ElementA
+      cutlass::layout::RowMajor,       // LayoutA
+      cutlass::int4b_t,                // ElementB
+      cutlass::layout::ColumnMajor,    // LayoutB
+      cutlass::half_t,                 // ElementOutput
+      cutlass::layout::RowMajor,       // LayoutOutput
+      int32_t,                         // ElementAccumulator
+      cutlass::arch::OpClassTensorOp,  // tag indicating Tensor Cores
+      cutlass::arch::Sm80  // tag indicating target GPU compute architecture
+      >;
+
+  Gemm gemmOp;
+
+  using GemmCoord = cutlass::gemm::GemmCoord;
+
+  typename Gemm::Arguments arguments{
+      {static_cast<GemmCoord::Index>(M), static_cast<GemmCoord::Index>(N),
+       static_cast<GemmCoord::Index>(K)},
+      {(cutlass::int4b_t *)A.data_ptr<uint8_t>(), K},
+      {(cutlass::int4b_t *)B.data_ptr<uint8_t>(), K},
+      {(cutlass::half_t *)y.data_ptr<torch::Half>(), N},
+      {(cutlass::half_t *)D.data_ptr<torch::Half>(), N},
+      {(cutlass::half_t *)scale_col.data_ptr<torch::Half>(), N},
+      {(cutlass::half_t *)scale_row.data_ptr<torch::Half>(), M},
+      {(cutlass::half_t *)zero_row.data_ptr<torch::Half>(), M},
+      {(cutlass::half_t *)w_reduced.data_ptr<torch::Half>(), N},
+      Gemm::ElementC(shift_value)};
+
+  auto status = gemmOp(arguments);
+
+  TORCH_CHECK(status == cutlass::Status::kSuccess,
+              cutlassGetStatusString(status))
+
+  return D;
+}
+
+torch::Tensor aint4FusedDequantize(
+    const torch::Tensor &A, const torch::Tensor &B,
+    const torch::Tensor &scale_row, const torch::Tensor &scale_col,
+    const float shift_value, const torch::Tensor &zero_row,
+    const torch::Tensor &w_reduced, const torch::Tensor &y) {
+  torch::checkAllContiguous("aint4FusedDequantize",
+                            {
+                                {A, "A", 0},
+                                {B, "B", 1},
+                                {scale_row, "scale_row", 2},
+                                {scale_col, "scale_col", 3},
+                                {zero_row, "zero_row", 4},
+                                {w_reduced, "w_reduced", 5},
+                                {y, "y", 5},
+                            });
+  torch::checkDeviceType("aint4FusedDequantize",
+                         {A, B, scale_row, scale_col, zero_row, w_reduced},
+                         at::DeviceType::CUDA);
+  return aint4FusedDequantizeCUDA(A, B, scale_row, scale_col, shift_value,
+                                 zero_row, w_reduced, y);
+}
 
 
 #include "symmetric/gemm/device/gemm_dequant.h"
@@ -1842,6 +2001,67 @@ torch::Tensor int8FusedDequantize(const torch::Tensor &A,
 
 
 
+torch::Tensor int4FusedDequantizeCUDA(const torch::Tensor &A,
+                                      const torch::Tensor &B,
+                                      const torch::Tensor &scale_row,
+                                      const torch::Tensor &scale_col,
+                                      const torch::Tensor &y, int M, int N, int K) {
+  torch::checkAllSameGPU("int4FusedDequantize", {{A, "A", 0},
+                                                 {B, "B", 1},
+                                                 {scale_row, "scale_row", 2},
+                                                 {scale_col, "scale_col", 3},
+                                                 {y, "y", 4}});
+
+  K = K * kElementsPerVector;
+  auto D = torch::empty({M, N}, torch::dtype(torch::kF16).device(A.device()));
+
+  using Gemm = cutlass::gemm::device::symmetric::GemmDequant<
+      cutlass::int4b_t,                // ElementA
+      cutlass::layout::RowMajor,       // LayoutA
+      cutlass::int4b_t,                // ElementB
+      cutlass::layout::ColumnMajor,    // LayoutB
+      cutlass::half_t,                 // ElementOutput
+      cutlass::layout::RowMajor,       // LayoutOutput
+      int32_t,                         // ElementAccumulator
+      cutlass::arch::OpClassTensorOp,  // tag indicating Tensor Cores
+      cutlass::arch::Sm80  // tag indicating target GPU compute architecture
+      >;
+
+  Gemm gemmOp;
+
+  using GemmCoord = cutlass::gemm::GemmCoord;
+
+  typename Gemm::Arguments arguments{
+      {static_cast<GemmCoord::Index>(M), static_cast<GemmCoord::Index>(N),
+       static_cast<GemmCoord::Index>(K)},
+      {(cutlass::int4b_t *)A.data_ptr<uint8_t>(), K},
+      {(cutlass::int4b_t *)B.data_ptr<uint8_t>(), K},
+      {(cutlass::half_t *)y.data_ptr<torch::Half>(), N},
+      {(cutlass::half_t *)D.data_ptr<torch::Half>(), N},
+      {(cutlass::half_t *)scale_col.data_ptr<torch::Half>(), N},
+      {(cutlass::half_t *)scale_row.data_ptr<torch::Half>(), M},
+      Gemm::ElementC(1)};
+
+  auto status = gemmOp(arguments);
+
+  TORCH_CHECK(status == cutlass::Status::kSuccess,
+              cutlassGetStatusString(status))
+
+  return D;
+}
+
+torch::Tensor int4FusedDequantize(const torch::Tensor &A,
+                                  const torch::Tensor &B,
+                                  const torch::Tensor &scale_row,
+                                  const torch::Tensor &scale_col,
+                                  const torch::Tensor &y,  int M, int N, int K) {
+
+  return int4FusedDequantizeCUDA(A, B, scale_row, scale_col, y, M, N, K);
+}
+
+
+
+
 #include "symmetric/gemm/device/gemm_dequantsilu.h"
 torch::Tensor int8FusedDequantizeSiluCUDA(
                                       const torch::Tensor &A,
@@ -1890,6 +2110,73 @@ torch::Tensor int8FusedDequantizeSiluCUDA(
               cutlassGetStatusString(status))
 
   return D;
+}
+
+
+
+
+torch::Tensor int4FusedDequantizeSiluCUDA(const torch::Tensor &A,
+                                      const torch::Tensor &B,
+                                      const torch::Tensor &scale_row,
+                                      const torch::Tensor &scale_col,
+                                      const torch::Tensor &y, int M, int N, int K) {
+  torch::checkAllSameGPU("int4FusedDequantize", {{A, "A", 0},
+                                                 {B, "B", 1},
+                                                 {scale_row, "scale_row", 2},
+                                                 {scale_col, "scale_col", 3},
+                                                 {y, "y", 4}});
+
+  K = K * kElementsPerVector;
+  auto D = torch::empty({M, N}, torch::dtype(torch::kF16).device(A.device()));
+
+  using Gemm = cutlass::gemm::device::symmetric::GemmDequantSilu<
+      cutlass::int4b_t,                // ElementA
+      cutlass::layout::RowMajor,       // LayoutA
+      cutlass::int4b_t,                // ElementB
+      cutlass::layout::ColumnMajor,    // LayoutB
+      cutlass::half_t,                 // ElementOutput
+      cutlass::layout::RowMajor,       // LayoutOutput
+      int32_t,                         // ElementAccumulator
+      cutlass::arch::OpClassTensorOp,  // tag indicating Tensor Cores
+      cutlass::arch::Sm80  // tag indicating target GPU compute architecture
+      >;
+
+  Gemm gemmOp;
+
+  using GemmCoord = cutlass::gemm::GemmCoord;
+
+  typename Gemm::Arguments arguments{
+      {static_cast<GemmCoord::Index>(M), static_cast<GemmCoord::Index>(N),
+       static_cast<GemmCoord::Index>(K)},
+      {(cutlass::int4b_t *)A.data_ptr<uint8_t>(), K},
+      {(cutlass::int4b_t *)B.data_ptr<uint8_t>(), K},
+      {(cutlass::half_t *)y.data_ptr<torch::Half>(), N},
+      {(cutlass::half_t *)D.data_ptr<torch::Half>(), N},
+      {(cutlass::half_t *)scale_col.data_ptr<torch::Half>(), N},
+      {(cutlass::half_t *)scale_row.data_ptr<torch::Half>(), M},
+      Gemm::ElementC(1)};
+
+  auto status = gemmOp(arguments);
+
+  TORCH_CHECK(status == cutlass::Status::kSuccess,
+              cutlassGetStatusString(status))
+
+  return D;
+}
+
+torch::Tensor int4FusedDequantizeSilu(const torch::Tensor &A,
+                                  const torch::Tensor &B,
+                                  const torch::Tensor &scale_row,
+                                  const torch::Tensor &scale_col,
+                                  const torch::Tensor &y,  int M, int N, int K) {
+  torch::checkAllContiguous("int4FusedDequantizeSilu", {{A, "A", 0},
+                                                    {B, "B", 1},
+                                                    {scale_row, "scale_row", 2},
+                                                    {scale_col, "scale_col", 3},
+                                                    {y, "y", 4}});
+  torch::checkDeviceType("int4FusedDequantizeSilu", {A, B, scale_row, scale_col, y},
+                         at::DeviceType::CUDA);
+  return int4FusedDequantizeSiluCUDA(A, B, scale_row, scale_col, y,  M, N, K);
 }
 torch::Tensor int8FusedDequantizeSilu(const torch::Tensor &A,
                                   const torch::Tensor &B,
@@ -1943,6 +2230,29 @@ __global__ void dequantizationKernel(torch::Half *__restrict__ out,
       y[col + row * cols]);
 }
 
+
+
+ 
+__global__ void dequantizationKernelPackInt4(torch::Half *__restrict__ out,
+                                     const cutlass::int4b_t *__restrict__ x,
+                                     const int * ind,  int len_ind,
+                                     const torch::Half *__restrict__ scaleRow,
+                                     const unsigned rows, const unsigned cols) {
+  const unsigned row = threadIdx.y + blockIdx.y * blockDim.y;
+  const unsigned col = threadIdx.x + blockIdx.x * blockDim.x;
+  if (col >= len_ind) {
+    return;
+  }
+  int col_ = 0;
+  if (row >= rows) {
+    return;
+  }
+ 
+
+//   float xElement =  __half2float(out[0]);
+//     printf("x ele= %.4f\n",xElement);
+  //out[col_ + row * cols] =  __float2half( ( xElement * __half2float(scaleRow[col_]))  ) ;
+}
 
 torch::Tensor dequantizationCUDA(const torch::Tensor &x,
                                  const torch::Tensor &scaleRow,
@@ -2197,20 +2507,102 @@ __global__ void FindRowScaleKernel(int8_t * output, const half * d_in, half * sc
 
 }
 
+
+
+
+template<int size>
+__global__ void FindRowScaleKernel4bit(Int4Storage * output, 
+        const half * d_in, half * scale, int rows, int cols, int colsDst){
+
+    __shared__ half sdata[size];
+
+    // each thread loads one element from global to shared mem
+    unsigned int tid = threadIdx.x;
+    unsigned int bid = blockIdx.x ;
+    if (bid > rows)
+        return ;
+    const  __half *start = d_in + bid * cols;
+    
+    sdata[tid] = __habs(start[tid]); 
+    for (int i = tid + size; i < cols; i += size)
+        sdata[tid] = __hmax ( __habs(start[i]),  sdata[tid] ); 
+    __syncthreads();
+
+
+    // do reduction in shared mem
+    for (unsigned int s= blockDim.x/2; s >= 1; s >>=1 ) {
+        if (tid < s) {
+            sdata[tid] =  __hmax ( __habs(sdata[tid + s]),  sdata[tid]);
+        }
+        __syncthreads();
+    }
+
+    half  max = sdata[0];
+    // write result for this block to global mem
+    //if (tid < 32) warpReduce(sdata, tid);
+
+    __syncthreads();
+
+    half quant_scales = __hdiv( max, 7.0);
+    if (tid == 0){
+        scale[bid] = quant_scales;
+    }
+
+    Int4Storage storage;
+    memset(&storage, 0, sizeof(storage));
+    Int4Storage * d_out = output + bid * colsDst;
+    // quant
+    for (int i = tid ; i < colsDst; i += size){
+        __half data1  = __hdiv( start[2*i + 0], quant_scales );
+        __half data2  = __hdiv( start[2*i + 1], quant_scales );
+        Int4Subbyte{reinterpret_cast<cutlass::int4b_t *>(&storage), 0}.set(
+            __half2int_rn(data1));
+        
+        Int4Subbyte{reinterpret_cast<cutlass::int4b_t *>(&storage), 1}.set(
+            __half2int_rn(data2));            
+        d_out[i] =  storage ; 
+    }
+    __syncthreads();    
+
+}
 torch::Tensor FindRowScale(  const torch::Tensor &x,  torch::Tensor &scaleRow,
-                         int rows, int cols) {
+                         int rows, int cols, int bit ) {
 
 
-  auto options = torch::TensorOptions().dtype(torch::kInt8).device(x.device());
-  auto quant_out = torch::zeros(
-      {rows, cols}, options);
-    dim3 block(256);
-    dim3 grid(rows, 1);
-    FindRowScaleKernel<256><<<grid, block>>>(
-        (int8_t *)quant_out.data_ptr<int8_t>(),
-        (half *)x.data_ptr<torch::Half>(), (half *)scaleRow.data_ptr<torch::Half>(),
-         rows, cols);
-    return quant_out;
+  
+
+  if (bit == 8){
+  
+            auto options = torch::TensorOptions().dtype(torch::kInt8).device(x.device());
+            auto quant_out = torch::zeros(
+                {rows, cols}, options);
+                dim3 block(256);
+                dim3 grid(rows, 1);
+            FindRowScaleKernel<256><<<grid, block>>>(
+                (int8_t *)quant_out.data_ptr<int8_t>(),
+                (half *)x.data_ptr<torch::Half>(), (half *)scaleRow.data_ptr<torch::Half>(),
+                rows, cols);
+            return quant_out;
+  }
+  else {
+
+            unsigned colsDst = (cols - 1) / 2 + 1;
+            assert (colsDst *2 == cols);
+            auto options = torch::TensorOptions().dtype
+            (TorchDtypeDispatcher<Int4Storage>::value).device(x.device());
+
+            auto quant_out = torch::zeros(
+                {rows, colsDst }, options);
+                dim3 block(256);
+                dim3 grid(rows, 1);
+            FindRowScaleKernel4bit<256><<<grid, block>>>(
+                quant_out.data_ptr<Int4Storage>(),
+                (half *)x.data_ptr<torch::Half>(), (half *)scaleRow.data_ptr<torch::Half>(),
+                rows, cols, colsDst);
+            return quant_out;
+ 
+  }
+  
 
 }
 
@@ -2594,4 +2986,93 @@ std::cout <<" k is" << n<<  std::endl;
   //mmaNaiveSqureWarp<2>(mat1_ptr, mat2_ptr, input_ptr, m, n, k, ind_ptr, lenid);
    
   return input;
+}
+
+
+torch::Tensor packInt4ToFp16(const torch::Tensor & weight, 
+                            const torch::Tensor & scale,
+                            const torch::Tensor & ind){
+    
+    auto row = weight.sizes()[0];
+    auto col = weight.sizes()[1] * 2;
+
+    std::cout << row << " ---" << col << std::endl;
+    int n = ind.sizes()[0];
+    std::cout << n << " n is" << std::endl;
+    auto options = torch::TensorOptions().dtype(torch::kFloat16).device(weight.device());  
+    at::Tensor output = torch::zeros({row, n}, options);    
+ 
+    cutlass::int4b_t *w = (cutlass::int4b_t*) weight.data_ptr<uint8_t>();
+     
+ 
+    int* ind_ptr = (int *)ind.data_ptr<int>();
+
+    dim3 block{std::min<unsigned>(n, 16),
+                std::min<unsigned>((row - 1) + 1, 16)};
+    dim3 grid{(n - 1) / block.x + 1, (row - 1) / block.y + 1};
+
+    dequantizationKernelPackInt4<<<grid, block>>>((torch::Half *)output.data_ptr<torch::Half>(), 
+    w,  ind_ptr, n, (torch::Half *) scale.data_ptr<torch::Half>(), row, col);
+}
+
+ 
+__global__ void unpack_int4_to_fp16_kernel(half * output, Int4Storage *weight, int * ind_ptr, 
+int row, int col, int n){
+    
+    int lane_id = threadIdx.x   % WARP_SIZE;
+    int warp_id =  threadIdx.x / 32;
+    int start_col = blockIdx.x * 4 + warp_id;
+
+    //printf("start col = %d  n = %d \n",start_col, n );
+    if (start_col >= n ){
+        return ;
+    }
+    int start_row = lane_id ;
+
+    int start_col_ = ind_ptr[start_col];
+    Int4Storage * w = weight +  start_col_ / 2;
+
+    //printf("Int4Storage start col = %d \n",start_col_ );
+    for (int i = start_row; i < row ; i+= 32){
+            
+        int8_t data = Int4Subbyte{reinterpret_cast<cutlass::int4b_t *>(&w[ i * col]), start_col_ % 2}.get();
+        output[i * n + start_col] =  convertToHalf(data) ;
+    }
+ 
+}
+
+ 
+
+
+ torch::Tensor unpack_int4_to_fp16(const torch::Tensor & weight, 
+                            const torch::Tensor & ind){
+
+
+    auto row = weight.sizes()[0];
+    auto col = weight.sizes()[1];
+    int n = ind.sizes()[0];
+
+    auto options = torch::TensorOptions().dtype(torch::kFloat16).device(weight.device());  
+    auto fp16_out = torch::zeros(
+        {row, n }, options);
+
+
+    const int blockSize = 128;
+
+
+    // 一个 warp 处理一列 block NumberOfblocksx 表示需要多少个block
+    const int NumberOfblocksx = (n + 4 - 1) / 4; // 一个warp 处理一列
+
+    dim3 numBlocks(NumberOfblocksx);
+
+
+    int* ind_ptr = (int *)ind.data_ptr<int>();
+ 
+    //std::cout << NumberOfblocksx << std::endl;
+    //std::cout << blockSize << std::endl;
+    unpack_int4_to_fp16_kernel<<<numBlocks, blockSize>>>( 
+        (half *) fp16_out.data_ptr<at::Half>(),
+        weight.data_ptr<Int4Storage>(), ind_ptr, row, col, n );
+    
+    return fp16_out;
 }

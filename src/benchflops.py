@@ -326,7 +326,7 @@ def main(args):
 
     all_stats = []
     
-    cache = MixLibCache()
+    cache = MixLibCache(bit=args.bit)
 
     print("downloading data......")
     text = prepare_data()
@@ -388,6 +388,7 @@ if __name__ == "__main__":
     parser.add_argument("--safetensors", default=False, action="store_true", help="Use for enabling safetensors")
     parser.add_argument("--use_fast_tokenizer", action="store_true", help="Wheter to use fast tokenizer")
     parser.add_argument("--seq_length", type=int, default=32)
+    parser.add_argument("--bit", type=int, default=8)
     args = parser.parse_args()
 
     main(args)

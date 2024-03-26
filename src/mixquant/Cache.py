@@ -3,7 +3,7 @@ import torch
 
 
 class MixLibCache:
-    def __init__(self, inputdim = 512, sigma = 6):
+    def __init__(self, inputdim = 512, sigma = 6, bit = 8):
         self.device = 'cuda'
         self.x_scale = torch.zeros((inputdim,1),dtype=torch.float16).to('cuda')
 
@@ -16,6 +16,7 @@ class MixLibCache:
         self.shape = None
         self.activation_outliers = None
         self.is_prefill = False
+        self.bit = bit
     def do_bench_cudagraph(self, fn):
         if torch.cuda.current_stream() == torch.cuda.default_stream():
             raise RuntimeError("Cannot capture graph in default stream. Please use side stream in benchmark code.")

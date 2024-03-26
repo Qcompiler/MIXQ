@@ -225,6 +225,8 @@ class QuantAttentionFused(nn.Module):
         xq = self.attention_shapes["xq_slice"](xqkv)
         xk = self.attention_shapes["xk_slice"](xqkv)
         xv = self.attention_shapes["xv_slice"](xqkv)
+
+ 
         query_states = xq.transpose(1, 2)
         key_states = xk.transpose(1, 2)
         value_states = xv.transpose(1, 2)
