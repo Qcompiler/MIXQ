@@ -99,17 +99,9 @@ class MixLinear_GEMM(nn.Module):
 
         else:
 
- 
-
-
-
-
 
             if bit == 8:
 
-
-                #self.scale_col = self.scale.repeat((1,self.N))
-                
                 scale =   (torch.max(torch.abs(linear.weight.data), dim=1)[0].unsqueeze(1) / (
                                 127)).to(torch.float16).reshape((1,linear.out_features))
                 quant_linear.scale_col.copy_(scale)
@@ -149,10 +141,7 @@ class MixLinear_GEMM(nn.Module):
 
         return quant_linear
     
-
-    @torch.no_grad()
-    def SetSigma(self,sigma):
-        self.sigma[0] = sigma
+ 
          
 
     
@@ -180,29 +169,16 @@ class MixLinear_GEMM(nn.Module):
         return self.weight_cache
 
     @torch.no_grad()
-    def forward(self, x, cache = None, weight_only = False):
-        #memory = torch.cuda.memory_allocated()/1024/1024
-        #print("start forward",memory)
-        #print(self.weight_only)
+    def forward(self, x, cache = None):
 
-
-
-        #torch.cuda.set_stream(cache.stream)
         if cache is  None:
             cache = self.cache
 
- 
+
         cache.shape = x.shape[:-1] + (self.out_features, )
 
- 
         inputs = x.reshape(-1, x.shape[-1])
- 
-
-
-
         M =  inputs.shape[0]
-        
-
 
         if self.weight_only is True:
 
@@ -211,12 +187,7 @@ class MixLinear_GEMM(nn.Module):
             if self.bias is not None:
                 y += self.bias
             return y.reshape(cache.shape)
-        if self.cache.is_prefill:
-            weight_cache = self.q_weight.to(torch.float16) *  self.scale_col.T            
-            y = torch.mm( inputs ,weight_cache.T  )      
-            return y.reshape(cache.shape)
-     
-
+ 
 
  
         if self.ind is None:
@@ -225,20 +196,18 @@ class MixLinear_GEMM(nn.Module):
             else:
                 self.ind = self.fp_indices
             cache.ind = self.ind
- 
             self.weight_cache = self.ExtractFP16weight()  
  
         if len(self.ind):  
             cache.activation_outliers = mixlib.ExtractOutliersAndSetToZeros(self.ind,inputs)
 
-            outliers_fp16 = torch.mm( cache.activation_outliers ,  self.weight_cache.T)
+             
 
  
         cache.q_xcache = mixlib.FindRowScale(inputs,cache.x_scale, M, self.in_features ,self.bit)
 
 
  
-
         if self.add_outliers:
             if cache.x_scale[0:M].max() > self.sigma / ((  2 ** (self.bit - 1) - 1  )  )  :
                  
@@ -260,16 +229,13 @@ class MixLinear_GEMM(nn.Module):
                 self.ind = torch.hstack((self.ind,ind))
                 cache.ind = self.ind
 
-
-
                 cache.q_xcache = mixlib.FindRowScale(inputs,cache.x_scale, M, self.in_features ,self.bit)
-                outliers_fp16 = torch.mm( cache.activation_outliers ,  self.weight_cache.T) 
+                
                 
             self.cnt += 1
             if self.cnt >= self.cache.stop or len(self.ind) > 256:
                 self.add_outliers = False
              
-            #print("after add outliers",torch.cuda.memory_allocated()/1024/1024 - memory)
 
  
 
@@ -279,7 +245,7 @@ class MixLinear_GEMM(nn.Module):
         if self.arch == 9:
             y = mixlib.gemm(cache.q_xcache,self.q_weight,M, self.out_features, self.in_features)
             if len(self.ind):
-                
+                outliers_fp16 = torch.mm( cache.activation_outliers ,  self.weight_cache.T) 
                 y1 = mixlib.dequantizeInt8(y, cache.x_scale, self.scale_col, outliers_fp16, 8, M, self.out_features)
                 
             else:
@@ -290,8 +256,9 @@ class MixLinear_GEMM(nn.Module):
 
             if len(self.ind):
                 
-
+                outliers_fp16 = torch.mm( cache.activation_outliers ,  self.weight_cache.T) 
                 if self.bit == 8:
+                    
                     y1 = mixlib.int8FusedDequantize(cache.q_xcache, 
                                                             self.q_weight, 
                                                             cache.x_scale,
@@ -309,21 +276,21 @@ class MixLinear_GEMM(nn.Module):
             else:
                 if self.bit == 8:    
                     y1 = mixlib.int8FusedDequantize(cache.q_xcache, 
-                                                            self.q_weight, 
-                                                            cache.x_scale,
-                                                            self.scale_col,
-                                                            self.cache.zeros,
-                                                            M,self.out_features,self.in_features)  
+                                                    self.q_weight, 
+                                                    cache.x_scale,
+                                                    self.scale_col,
+                                                    self.cache.zeros,
+                                                    M,self.out_features,self.in_features)  
 
                     
                 if self.bit == 4:  
                       
                     y1 = mixlib.int4FusedDequantize(cache.q_xcache, 
-                                                            self.q_weight, 
-                                                            cache.x_scale,
-                                                            self.scale_col,
-                                                            self.cache.zeros,
-                                                            M,self.out_features,(self.in_features )// 2) 
+                                                    self.q_weight, 
+                                                    cache.x_scale,
+                                                    self.scale_col,
+                                                    self.cache.zeros,
+                                                    M,self.out_features,(self.in_features )// 2) 
         if self.bias is not None:
             y1 += self.bias
         
@@ -338,12 +305,6 @@ class MixLinear_GEMM(nn.Module):
         inputs = x.reshape(-1, x.shape[-1])
         M =  inputs.shape[0]
         assert M == cache.shape[0]
-
-        if self.cache.is_prefill:
-            weight_cache = self.q_weight.to(torch.float16) *  self.scale_col.T
-            y = torch.mm( inputs ,weight_cache.T  )      
-            return y.reshape(cache.shape)
-        
 
       
         if self.weight_only is True:
@@ -422,7 +383,7 @@ class MixLinear_GEMM(nn.Module):
                 else:
  
                     raise RuntimeError("int4 mod should have outliers !")
-        #print("after gemm",torch.cuda.memory_allocated()/1024/1024 - memory)
+
         if self.bias is not None:
             y1 += self.bias
 

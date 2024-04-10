@@ -216,7 +216,7 @@ class QuantAttentionFused(nn.Module):
     ) :
         bsz, q_len, _ = hidden_states.size()
         assert self.cache_batch_size == bsz
-        proj = self.W_pack(hidden_states, self.MixGemmCache, False)
+        proj = self.W_pack(hidden_states)
 
         
         xqkv = proj.view((bsz, q_len) + self.attention_shapes["xqkv_view"])
@@ -316,7 +316,7 @@ class QuantAttentionFusedBaichuan13B(torch.nn.Module):
     ) :
         bsz, q_len, _ = hidden_states.size()
 
-        proj = self.W_pack(hidden_states, self.MixGemmCache)
+        proj = self.W_pack(hidden_states)
         proj = (
             proj.unflatten(-1, (3, self.hidden_size))
             .unsqueeze(0)
