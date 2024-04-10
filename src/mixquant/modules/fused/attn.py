@@ -258,7 +258,7 @@ class QuantAttentionFused(nn.Module):
         )
 
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
-        attn_output = self.o_proj(attn_output, self.MixGemmCache, True)
+        attn_output = self.o_proj(attn_output)
         # print(attn_output)
         # with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=True, enable_mem_efficient=True):
         #     attn_output2 = F.scaled_dot_product_attention(query_states, key_states, value_states, attn_mask = attention_mask)

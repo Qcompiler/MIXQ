@@ -10,8 +10,8 @@ CAUSAL_LM_MODEL_MAP = {
     "aquila": LlamaMixQForCausalLM,
     "mistral": MistralMixForCausalLM,
     "gptj" : GPTJMixForCausalLM,
-    "falcon": FalconMixForCausalLM
-
+    "falcon": FalconMixForCausalLM,
+    "opt": OptMixForCausalLM
 }
 
 def check_and_get_model_type(model_dir, trust_remote_code=True):

@@ -11,7 +11,7 @@ from huggingface_hub import snapshot_download
 
 from transformers.modeling_utils import shard_checkpoint
 from mixquant.modules.linear import   MixLinear_GEMM
-from mixquant.utils.module import get_named_linears, set_op_by_name, weight_only_map
+from mixquant.utils.module import get_named_linears, set_op_by_name, weight_only_map,eightbit_only_name
 from transformers import AutoModelForCausalLM, AutoConfig, PreTrainedModel
 from accelerate import init_empty_weights, load_checkpoint_in_model, infer_auto_device_map
 
@@ -41,7 +41,7 @@ class BaseForCausalLM(nn.Module):
                        split="train", text_column="text"):
         self.quant_config = quant_config
         quant_config["version"] = "MIX"
-        quant_config["q_group_size"] = 0
+        quant_config["q_group_size"] = 128
         from  mixquant.quantize.mixquant import MixQuantizer
 
         quantizer = MixQuantizer(
@@ -268,12 +268,37 @@ class BaseForCausalLM(nn.Module):
                     if key in  name:
                         weight_only = True
                         break
+                bit =  self.quant_config['w_bit']
+                for key in eightbit_only_name:
+                    if key in  name:
+                        bit = 8 
 
-                q_linear =  MixLinear_GEMM.from_linear(module,
-                                           bit =  self.quant_config['w_bit'],
-                                           weight_only = weight_only, 
-                                           init_only = True,
-                                           cache = MixGemmcache)
+
+             
+                if weight_only is True:
+
+                    q_linear =  MixLinear_GEMM.from_linear(module,
+                                            bit =  bit,
+                                            weight_only = weight_only, 
+                                            init_only = True,
+                                            cache = MixGemmcache)
+                    # import sys
+                    # sys.path.append('/home/chenyidong/quant/AutoAWQ1.0')
+                    # from awq.modules.linear import (
+                    #     WQLinear_GEMM,
+                    # )   
+                    # w_bit = 4
+                    # q_group_size = 128
+                    # q_linear_module = WQLinear_GEMM
+                    # q_linear = q_linear_module.from_linear(
+                    # module, w_bit, q_group_size, True)
+
+                else:
+                    q_linear =  MixLinear_GEMM.from_linear(module,
+                                            bit =  bit,
+                                            weight_only = weight_only, 
+                                            init_only = True,
+                                            cache = MixGemmcache)
 
  
                 q_linear.to(next(layer.parameters()).device)

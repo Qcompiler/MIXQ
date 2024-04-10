@@ -35,8 +35,6 @@ class MixLinear_GEMM(nn.Module):
  
 
 
-        # self.register_buffer('qweight', torch.empty((out_features,in_features), dtype=torch.int8, device=dev))
-        # self.register_buffer('scale', torch.empty((1,1), dtype=torch.float16, device=dev))
         if weight_only is False:
             self.register_buffer('scale_col', torch.empty((1,out_features), dtype=torch.float16, device=dev,requires_grad=False))
 
@@ -135,8 +133,7 @@ class MixLinear_GEMM(nn.Module):
                 tmp = linear.weight.data.cuda()
                 tmp[:, linear.fp_indices] = 0
 
-                scale =   (torch.max(torch.abs(tmp), dim=1)[0].unsqueeze(1) / (
-                               10)).to(torch.float16).reshape((1,linear.out_features))
+                scale =   (torch.max(torch.abs(tmp), dim=1)[0].unsqueeze(1) / (10)).to(torch.float16).reshape((1,linear.out_features))
                 quant_linear.scale_col.copy_(scale)
                 tmp /= quant_linear.scale_col.T
 
@@ -187,6 +184,7 @@ class MixLinear_GEMM(nn.Module):
         #memory = torch.cuda.memory_allocated()/1024/1024
         #print("start forward",memory)
         #print(self.weight_only)
+
 
 
         #torch.cuda.set_stream(cache.stream)
@@ -242,27 +240,23 @@ class MixLinear_GEMM(nn.Module):
  
 
         if self.add_outliers:
-            if cache.x_scale[0:M].max() > self.sigma :
+            if cache.x_scale[0:M].max() > self.sigma / ((  2 ** (self.bit - 1) - 1  )  )  :
                  
                 ind = torch.unique(torch.where((  inputs.abs() > self.sigma ))[1])
- 
-
                 ind = ind.to(torch.int32)
                 activation_outliers = mixlib.ExtractOutliersAndSetToZeros(ind,inputs)
-   
                 if self.bit == 8:
                     weight_cache = self.q_weight[:,ind].to(torch.float16) *  self.scale_col.T
                 else:
-                    
                     w = unpack_int8_to_int4(self.q_weight, ind)
                     weight_cache = w *  self.scale_col.T
-
  
-                if len(ind) == 0:
+                if len(self.ind) == 0:
                     cache.activation_outliers = activation_outliers
+                    self.weight_cache =  weight_cache
                 else:
                     cache.activation_outliers =  torch.hstack((cache.activation_outliers,activation_outliers))
-                self.weight_cache =  torch.hstack((self.weight_cache,weight_cache))
+                    self.weight_cache =  torch.hstack((self.weight_cache,weight_cache))
                 self.ind = torch.hstack((self.ind,ind))
                 cache.ind = self.ind
 
@@ -272,9 +266,9 @@ class MixLinear_GEMM(nn.Module):
                 outliers_fp16 = torch.mm( cache.activation_outliers ,  self.weight_cache.T) 
                 
             self.cnt += 1
-            if self.cnt >= 10 or len(self.ind) > 256:
+            if self.cnt >= self.cache.stop or len(self.ind) > 256:
                 self.add_outliers = False
-            torch.cuda.empty_cache()
+             
             #print("after add outliers",torch.cuda.memory_allocated()/1024/1024 - memory)
 
  
@@ -328,7 +322,7 @@ class MixLinear_GEMM(nn.Module):
                                                             self.q_weight, 
                                                             cache.x_scale,
                                                             self.scale_col,
-                                                            fp16_outliers_static,
+                                                            self.cache.zeros,
                                                             M,self.out_features,(self.in_features )// 2) 
         if self.bias is not None:
             y1 += self.bias
@@ -389,8 +383,8 @@ class MixLinear_GEMM(nn.Module):
         else:    
             if self.bit == 8:        
                 if len(self.ind):
+ 
                     
-
                     outliers_fp16 = torch.mm( cache.activation_outliers,  self.weight_cache.T)
                 
                     

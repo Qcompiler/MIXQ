@@ -276,7 +276,8 @@ if __name__ == "__main__":
         llama_replace_with_kernels(model, args)    
         model = model.to('cuda')
     print(model)
-    ppl = Perplexity(model, tokenizer, args.dataset_path, args.dataset_name, args.split, args.text_column, args.eval_accuracy)
+    ppl = Perplexity(model, tokenizer, args.dataset_path, args.dataset_name, 
+                     args.split, args.text_column, args.eval_accuracy)
     allppl = ppl.calculate_perplexity(args.n_ctx, args.n_batch)
 
     data = pd.DataFrame(allppl)

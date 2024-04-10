@@ -5,7 +5,11 @@ export http_proxy=127.0.0.1:7890
 export https_proxy=127.0.0.1:7890
 set -x
 
-for batch in   512 
+
+bit=8
+for batch in   1
+#for batch in  1  
+
     do
     for seq in   64  
         do
@@ -19,6 +23,7 @@ for batch in   512
             
             models=(     "Llama-2-7b"  ) 
             data_types=( "mix"  )
+            
             for data_type in "${data_types[@]}"
                 do
                 for model in "${models[@]}"
@@ -26,13 +31,14 @@ for batch in   512
                     echo ${model}          
                     CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890  \
                     ${CMD} benchflops.py  --model_type ${data_type} --model_path  \
-                    /mnt/octave/data/chenyidong/checkpoint/quant4bit/${model} \
-                    --quant_file /mnt/octave/data/chenyidong/checkpoint/quant4bit/${model} --batch_size ${batch} --bit 4
+                    /home/dataset/quant${bit}/${model} \
+                    --quant_file /home/dataset/quant${bit}/${model} \
+                    --batch_size ${batch} --bit ${bit}
 
                 done
             done 
             
-            # data_types=(  "fp16" "bitsandbytes"  )
+            # data_types=(  "fp16"   )
             # for data_type in "${data_types[@]}"
             #     do
             #     for model in "${models[@]}"

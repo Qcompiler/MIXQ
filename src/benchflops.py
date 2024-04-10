@@ -2,14 +2,15 @@
 import os
 import sys
 
-import awq
+
 os.environ["WORLD_SIZE"] = "1"
 import time
 import torch
 import argparse
 import numpy as np
 import pandas as pd
-from awq import AutoAWQForCausalLM
+
+
 from transformers import AutoTokenizer
 from torch.cuda import OutOfMemoryError
 torch.manual_seed(0)
@@ -140,6 +141,9 @@ def run_round(model_path, quant_file, n_generate, token, batch_size, safetensors
 
 
     if model_type == 'awq':
+
+        import awq
+        from awq import AutoAWQForCausalLM
         print(f" -- Loading model awq...")
         model = AutoAWQForCausalLM.from_quantized(
             model_path, quant_file, fuse_layers=True,
@@ -277,6 +281,7 @@ def run_round(model_path, quant_file, n_generate, token, batch_size, safetensors
         model = model.to('cuda')
 
 
+    print(model)
     print(f" -- Warming up...")
     warmup(model)
 
@@ -372,7 +377,8 @@ def main(args):
         os.mkdir('output/throughput/'+args.model_type)
     except:
         pass
-    df.to_csv('output/throughput/'+args.model_type + '/' + args.quant_file.split("/")[-1]+".csv"+str(args.batch_size))
+    df.to_csv('output/throughput/'+args.model_type + '/' + args.quant_file.split("/")[-1] \
+              + str(args.batch_size) + '_' +  str(args.bit) + ".csv")
 
 if __name__ == "__main__":
 
