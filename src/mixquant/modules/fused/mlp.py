@@ -2,7 +2,7 @@ import torch.nn as nn
 
 import torch
 from mixquant.Cache import MixLibCache, MLPCache
-
+import mixlib
 
 
 class MixFalconMLP(nn.Module):
@@ -49,7 +49,7 @@ class MixLlamaMLP(nn.Module):
         self.gate_proj_ = gate_proj
         self.up_proj_ = up_proj
         self.out_features = down_proj.out_features
-        self.MLPCache = MLPCache()
+        self.MLPCache = MixGemmCache
         
  
     def forward(self, x):
@@ -63,9 +63,11 @@ class MixLlamaMLP(nn.Module):
         gate_output = self.gate_proj_.forward_without_preconditionFusedSilu(x, self.MLPCache)
         
         gate_output *= up_output
- 
-        y = self.down_proj_(gate_output)
-        #print("down time",time.time() - start)
+        assert  len(gate_output.shape) == 2
+
+
+        y = self.down_proj_(gate_output,None,True)
+
  
         return y.reshape(out_shape)
     

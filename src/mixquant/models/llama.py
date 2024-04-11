@@ -13,9 +13,15 @@ class LlamaMixQForCausalLM(BaseForCausalLM):
         
         fuser.fuse_attention(MixGemmCache = cache)
         
-        fuser.fuse_rmsnorm()
         fuser.fuse_mlp(mix, MixGemmCache = cache)
+        fuser.fuse_rmsnorm(MixGemmCache = cache)
 
+
+        for layer in model.model.layers:
+            layer.input_layernorm.next_layer = layer.self_attn.W_pack
+            layer.post_attention_layernorm.next_layer = layer.mlp.up_proj_ 
+
+ 
     @staticmethod
     def get_model_layers(model: LlamaForCausalLM):
         return model.model.layers
@@ -129,11 +135,13 @@ class LlamaFuser:
 
 
                 
-                qkv_layer.fp_weight.copy_(torch.cat([q_proj.fp_weight, k_proj.fp_weight, v_proj.fp_weight], dim=0))
+                qkv_layer.weight_cache.copy_(torch.cat([q_proj.weight_cache, 
+                                                        k_proj.weight_cache, 
+                                                        v_proj.weight_cache], dim=0))
       
  
 
-                qkv_layer.fp_indices.copy_(q_proj.fp_indices)
+                qkv_layer.ind.copy_(q_proj.ind)
 
 
   
@@ -157,9 +165,9 @@ class LlamaFuser:
         torch.cuda.empty_cache()
         return qkv_layer
 
-    def fuse_rmsnorm(self):
+    def fuse_rmsnorm(self, MixGemmCache):
         for name, module in self.rmsnorm_modules:
-            norm = FasterTransformerRMSNorm(module.weight, module.variance_epsilon)
+            norm = FasterTransformerRMSNorm(module.weight, module.variance_epsilon, MixGemmCache)
             set_module_name(self.model, name, norm)
 
     def fuse_mlp(self,mix, MixGemmCache = None):

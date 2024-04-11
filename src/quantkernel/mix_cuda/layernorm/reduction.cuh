@@ -44,6 +44,16 @@ __inline__ __device__ T warpReduceSum(T val)
     return val;
 }
 
+template<typename T>
+__inline__ __device__ T warpReduceAMax(T val)
+{
+#pragma unroll
+    for (int mask = 16; mask > 0; mask >>= 1)
+        val = __hmax(val, __shfl_xor_sync(FINAL_MASK, val, mask, 32)); 
+    return val;
+}
+
+
 /* Calculate the sum of all elements in a block */
 template<typename T>
 __inline__ __device__ T blockReduceSum(T val)
@@ -67,6 +77,29 @@ __inline__ __device__ T blockReduceSum(T val)
     return val;
 }
 
+
+
+template<typename T>
+__inline__ __device__ T blockReduceAMax(T val)
+{
+    static __shared__ T shared[32];
+    int                 lane = threadIdx.x & 0x1f;
+    int                 wid  = threadIdx.x >> 5;
+
+    val = warpReduceAMax<T>(val);
+
+    if (lane == 0)
+        shared[wid] = val;
+
+    __syncthreads();
+
+    // Modify from blockDim.x << 5 to blockDim.x / 32. to prevent
+    // blockDim.x is not divided by 32
+    val = (threadIdx.x < (blockDim.x / 32.f)) ? shared[lane] : (T)(0.0f);
+    val = warpReduceAMax<T>(val);
+
+    return val;
+}
 
 template<typename T>
 __device__ __forceinline__ T clamp_inf_for_half(const float input)

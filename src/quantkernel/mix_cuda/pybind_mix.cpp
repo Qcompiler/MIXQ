@@ -239,6 +239,13 @@ torch::Tensor aint4FusedDequantizeSilu(
     const torch::Tensor &w_reduced, const torch::Tensor &y);
 
 void layernorm_forward_cuda(torch::Tensor _input, torch::Tensor _gamma, torch::Tensor _out, float eps);
+std::vector<torch::Tensor>  layernorm_forward_cuda_extract_outliers(torch::Tensor &_input, torch::Tensor &_gamma, 
+                torch::Tensor &_out, float eps, torch::Tensor &_ind,  torch::Tensor &scaleRow);
+std::vector<torch::Tensor>  layernorm_forward_cuda_extract_outliers_int4(torch::Tensor &_input, torch::Tensor &_gamma, 
+                torch::Tensor &_out, float eps, torch::Tensor &_ind,  torch::Tensor &scaleRow);
+
+
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("cigemmlt_ampere_32", &cigemmlt_ampere_32, "cigemmlt_ampere_32");
     m.def("get_context", &get_context, "get_context");
@@ -292,6 +299,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     m.def("layernorm_forward_cuda", &layernorm_forward_cuda,
         "layernorm_forward_cuda");
+    m.def("layernorm_forward_cuda_extract_outliers", &layernorm_forward_cuda_extract_outliers,
+        "layernorm_forward_cuda_extract_outliers");
+    m.def("layernorm_forward_cuda_extract_outliers_int4", &layernorm_forward_cuda_extract_outliers_int4,
+        "layernorm_forward_cuda_extract_outliers_int4");
+        
 
     m.def("dequantizeInt8", &dequantizeInt8,
         "dequantizeInt8");

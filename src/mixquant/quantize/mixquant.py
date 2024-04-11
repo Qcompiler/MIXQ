@@ -105,10 +105,13 @@ class MixQuantizer:
                 if key in  name:
                     weight_only = True
                     break
+                
             w_bit = self.w_bit
-            for key in eightbit_only_name:
-                if key in  name:
-                    w_bit = 8   
+            if w_bit == 4:
+                for key in eightbit_only_name:
+                    if key in  name:
+                        w_bit = 8
+                        weight_only = False 
 
             if w_bit == 4:
                 relative_path = "act_scales/%s.pt"%(self.model.config._name_or_path.split("/")[-1])
@@ -162,7 +165,7 @@ class MixQuantizer:
                 q_linear = q_linear_module.from_linear(
                     linear=linear_layer,
                     weight_only = weight_only,
-                    init_only=False,
+                    init_only = False,
                     bit = w_bit,
                     layer_scales = layer_scales
                 )

@@ -3,7 +3,7 @@ eightbit_only_name = ["down_proj"]
 
 weight_only_map = {
     "GPTJForCausalLM":    ["out_proj", "fc_out"], 
-    "LlamaForCausalLM":   ["o_proj"],
+    "LlamaForCausalLM":   ["o_proj","down_proj"],
     "AquilaForCausalLM":  ["o_proj","down_proj"],
     "BaichuanForCausalLM": ["o_proj","down_proj"],
     "MistralForCausalLM": ["o_proj","down_proj"],

@@ -269,9 +269,12 @@ class BaseForCausalLM(nn.Module):
                         weight_only = True
                         break
                 bit =  self.quant_config['w_bit']
-                for key in eightbit_only_name:
-                    if key in  name:
-                        bit = 8 
+
+                if bit == 4:
+                    for key in eightbit_only_name:
+                        if key in  name:
+                            bit = 8
+                            weight_only = False 
 
 
              

@@ -6,8 +6,8 @@ export https_proxy=127.0.0.1:7890
 set -x
 
 
-bit=8
-for batch in   1
+bit=4
+for batch in   512
 #for batch in  1  
 
     do
