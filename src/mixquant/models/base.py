@@ -285,16 +285,7 @@ class BaseForCausalLM(nn.Module):
                                             weight_only = weight_only, 
                                             init_only = True,
                                             cache = MixGemmcache)
-                    # import sys
-                    # sys.path.append('/home/chenyidong/quant/AutoAWQ1.0')
-                    # from awq.modules.linear import (
-                    #     WQLinear_GEMM,
-                    # )   
-                    # w_bit = 4
-                    # q_group_size = 128
-                    # q_linear_module = WQLinear_GEMM
-                    # q_linear = q_linear_module.from_linear(
-                    # module, w_bit, q_group_size, True)
+
 
                 else:
                     q_linear =  MixLinear_GEMM.from_linear(module,

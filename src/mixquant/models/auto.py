@@ -8,7 +8,7 @@ CAUSAL_LM_MODEL_MAP = {
     "llama": LlamaMixQForCausalLM,
     "baichuan": BaichuanMixQForCausalLM,
     "aquila": LlamaMixQForCausalLM,
-    "mistral": MistralMixForCausalLM,
+    #"mistral": MistralMixForCausalLM,
     "gptj" : GPTJMixForCausalLM,
     "falcon": FalconMixForCausalLM,
     "opt": OptMixForCausalLM

@@ -20,13 +20,13 @@ class MixFalconMLP(nn.Module):
         self.dense_h_to_4h = dense_h_to_4h
         self.dense_4h_to_h = dense_4h_to_h
         self.act = nn.GELU()
-        self.MixGemmCache = MixLibCache(512)        
+        self.MixGemmCache = MixGemmCache   
 
  
     def forward(self, x):
  
         x = self.act(self.dense_h_to_4h(x, self.MixGemmCache))
-        x = self.dense_4h_to_h(x, self.MixGemmCache)
+        x = self.dense_4h_to_h(x, self.MixGemmCache,True)
         
         return x
     
@@ -56,20 +56,16 @@ class MixLlamaMLP(nn.Module):
  
         
         
-        out_shape = x.shape[:-1] + (self.out_features,)
-        x = x.reshape(-1, x.shape[-1])
- 
         up_output = self.up_proj_(x, self.MLPCache)
         gate_output = self.gate_proj_.forward_without_preconditionFusedSilu(x, self.MLPCache)
         
         gate_output *= up_output
-        assert  len(gate_output.shape) == 2
 
 
         y = self.down_proj_(gate_output,None,True)
 
  
-        return y.reshape(out_shape)
+        return y
     
  
 from transformers.activations import ACT2FN

@@ -179,7 +179,7 @@ class MixLinear_GEMM(nn.Module):
  
         
         if unfused:
-            if len(self.ind):
+            if self.ind.shape[0]:
                 cache.activation_outliers = mixlib.ExtractOutliersAndSetToZeros(self.ind, inputs)
             cache.q_xcache = mixlib.FindRowScale(inputs,cache.x_scale, 
                                                         inputs.shape[0], 
@@ -203,7 +203,7 @@ class MixLinear_GEMM(nn.Module):
                     w = unpack_int8_to_int4(self.q_weight, ind)
                     weight_cache = w *  self.scale_col.T
  
-                if len(self.ind) == 0:
+                if self.ind.shape[0] == 0:
                     cache.activation_outliers = activation_outliers
                     self.weight_cache =  weight_cache
                 else:
@@ -216,7 +216,7 @@ class MixLinear_GEMM(nn.Module):
                 
                 
             self.cnt += 1
-            if self.cnt >= self.cache.stop or len(self.ind) > 256:
+            if self.cnt >= self.cache.stop or self.ind.shape[0] > 256:
                 self.add_outliers = False
              
 
@@ -227,7 +227,7 @@ class MixLinear_GEMM(nn.Module):
         
         if self.arch == 9:
             y = mixlib.gemm(cache.q_xcache,self.q_weight,M, self.out_features, self.in_features)
-            if len(self.ind):
+            if self.ind.shape[0]:
                 outliers_fp16 = torch.mm( cache.activation_outliers ,  self.weight_cache.T) 
                 y1 = mixlib.dequantizeInt8(y, cache.x_scale, self.scale_col, outliers_fp16, 8, M, self.out_features)
                 
@@ -237,7 +237,7 @@ class MixLinear_GEMM(nn.Module):
 
         else:
 
-            if len(self.ind):
+            if self.ind.shape[0]:
                 
                 outliers_fp16 = torch.mm( cache.activation_outliers ,  self.weight_cache.T) 
                 if self.bit == 8:
@@ -277,7 +277,7 @@ class MixLinear_GEMM(nn.Module):
         if self.bias is not None:
             y1 += self.bias
         
-        #print(len(self.ind))
+        #print(self.ind.shape[0])
  
         return y1.reshape(cache.shape)
 
@@ -287,12 +287,11 @@ class MixLinear_GEMM(nn.Module):
 
         inputs = x.reshape(-1, x.shape[-1])
         M =  inputs.shape[0]
-        assert M == cache.shape[0]
 
 
-        if not self.forward_without_precondition_len == len(cache.ind):
+        if not self.forward_without_precondition_len ==  cache.ind.shape[0]:
             self.ind = cache.ind
-            if len(self.ind):
+            if self.ind.shape[0]:
                 if self.bit == 8:
                     self.weight_cache = self.q_weight[:,self.ind].to(torch.float16) 
                     self.weight_cache *=  self.scale_col.T
@@ -300,14 +299,14 @@ class MixLinear_GEMM(nn.Module):
                 if self.bit == 4:
                     self.weight_cache = self.weight_cache
 
-                self.forward_without_precondition_len = len(self.ind)
+                self.forward_without_precondition_len = self.ind.shape[0]
 
  
  
       
         if self.arch == 9:
             y = mixlib.gemm(cache.q_xcache,self.q_weight,M, self.out_features, self.in_features)
-            if len(self.ind):
+            if self.ind.shape[0]:
                 outliers_fp16 = torch.mm( cache.activation_outliers ,  self.weight_cache.T)
                 y1 = mixlib.dequantizeInt8Silu(y, cache.x_scale, self.scale_col, outliers_fp16, 8, M, self.out_features)
                 
@@ -317,7 +316,7 @@ class MixLinear_GEMM(nn.Module):
 
         else:    
             if self.bit == 8:        
-                if len(self.ind):
+                if self.ind.shape[0]:
  
                     outliers_fp16 = torch.mm( cache.activation_outliers,  self.weight_cache.T)
                 
@@ -339,7 +338,7 @@ class MixLinear_GEMM(nn.Module):
                                                             M,self.out_features,self.in_features )  
 
             if self.bit == 4:        
-                if len(self.ind):
+                if self.ind.shape[0]:
 
 
                     outliers_fp16 = torch.mm( cache.activation_outliers,  

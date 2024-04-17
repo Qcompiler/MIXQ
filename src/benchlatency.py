@@ -315,7 +315,8 @@ def run_round(model_path, quant_file, n_generate, token, batch_size, safetensors
         "Batch Size": batch_size,
         "Decode Length": n_generate,
         "Decode tokens/s": decode_tokens_per_second,
-        "Memory (VRAM)": f"{memory_used:.2f} GB ({memory_pct:.2f}%)"
+        "Memory (VRAM)": f"{memory_used:.2f} GB ({memory_pct:.2f}%)",
+        "latency" : generate_time
     }, args.model_type
 
 def main(args):
@@ -393,7 +394,7 @@ if __name__ == "__main__":
     parser.add_argument("--model_type", type=str, default="awq")
     parser.add_argument("--safetensors", default=False, action="store_true", help="Use for enabling safetensors")
     parser.add_argument("--use_fast_tokenizer", action="store_true", help="Wheter to use fast tokenizer")
-    parser.add_argument("--seq_length", type=int, default=512)
+    parser.add_argument("--seq_length", type=int, default=32)
     parser.add_argument("--bit", type=int, default=8)
     args = parser.parse_args()
 

@@ -6,7 +6,7 @@ CMD="srun -N 1 --pty --gres=gpu:a100:2 -p octave -A public python"
 export http_proxy=127.0.0.1:7890 
 export https_proxy=127.0.0.1:7890
 set -x
-bit=4
+
 for batch in    512 
     do
     for seq in   64  
@@ -52,9 +52,9 @@ for batch in    512
             #     done
             # done
             data_types=( "mix"  )
-            models=(    "falcon-7b"  )
+
             models=(    "Llama-2-7b" )
-           # models=(    "opt-6.7b" )
+            bit=4
             for data_type in "${data_types[@]}"
                 do
                 for model in "${models[@]}"
@@ -68,6 +68,20 @@ for batch in    512
                 done
             done
 
+            models=(    "Llama-2-7b" )
+            bit=8
+            for data_type in "${data_types[@]}"
+                do
+                for model in "${models[@]}"
+                    do
+                    echo ${model}          
+                    CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:7890 https_proxy=127.0.0.1:7890  \
+                    ${CMD} evalppl.py --fp_features_num 128 --model_type ${data_type} --model_path  \
+                    /home/dataset/quant${bit}/${model} \
+                    --quant_file  /home/dataset/quant${bit}/${model} \
+                    --n_ctx $batch --n_batch $batch  --eval_accuracy True
+                done
+            done
             # for data_type in "${data_types[@]}"
             #     do
             #     for model in "${models[@]}"

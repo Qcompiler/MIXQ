@@ -1,5 +1,5 @@
 import torch.nn as nn
-eightbit_only_name = ["down_proj"]
+eightbit_only_name = ["o_proj","down_proj"]
 
 weight_only_map = {
     "GPTJForCausalLM":    ["out_proj", "fc_out"], 
