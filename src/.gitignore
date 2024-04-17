@@ -180,3 +180,5 @@ outputweight/
 outputncu/
 roofline/
 weight/
+*.onnx
+
