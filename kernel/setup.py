@@ -14,9 +14,9 @@ except Exception as ex:
     raise RuntimeError("Your system must have an Nvidia GPU")
 
 common_setup_kwargs = {
-    "version": f"0.1.5+cu{CUDA_VERSION}",
+    "version": f"0.1.6+cu{CUDA_VERSION}",
     "name": "mixlib",
-    "author": "Casper Hansen",
+    "author": "Jidong Zhai; Yidong Chen; Tsinghua University",
     "license": "MIT",
     "python_requires": ">=3.8.0",
     "long_description_content_type": "text/markdown",
@@ -62,8 +62,6 @@ def get_include_dirs():
     include_dirs.append(os.path.join(this_dir,"common"))
     include_dirs.append("cutlass/include")
 
-    # include_dirs.append("/home/chenyidong/quant/cutlass/tools/util/include")
-    # include_dirs.append("/home/chenyidong/quant/cutlass/include")
 
     return include_dirs
 
@@ -102,8 +100,6 @@ check_dependencies()
 include_dirs = get_include_dirs()
 generator_flags = get_generator_flag()
 arch_flags = get_compute_capabilities()
-# library_dirs_ = ['/home/chenyidong/quant/cutlass_fpA_intB_gemm/cutlass_kernels',]
-# libraries_ = ['fpA_intB_gemm',]
 
 print(include_dirs)
 if os.name == "nt":
@@ -143,8 +139,7 @@ extensions = [
             "mix_cuda/layernorm/layernorm.cu",
             #"mix_cuda/cutlassmix.cu",
         ], 
-        # library_dirs =library_dirs_,
-        # libraries=libraries_,
+
         
         
         extra_compile_args=extra_compile_args

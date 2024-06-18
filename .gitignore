@@ -153,7 +153,7 @@ dmypy.json
 # pytype static type analyzer
 .pytype/
 
-# Cython debug symbols
+# Cython debug symbolsd
 cython_debug/
 
 # PyCharm
