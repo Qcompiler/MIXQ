@@ -178,15 +178,14 @@ class MixLinear_GEMM(nn.Module):
             return y.reshape(cache.shape)
  
         
-        if unfused:
+        if unfused :
             if self.ind.shape[0]:
                 cache.activation_outliers = mixlib.ExtractOutliersAndSetToZeros(self.ind, inputs)
+                
             cache.q_xcache = mixlib.FindRowScale(inputs,cache.x_scale, 
                                                         inputs.shape[0], 
                                                         self.in_features,
                                                         self.bit)  
-            
-        
 
         cache.ind = self.ind
 
@@ -362,3 +361,5 @@ class MixLinear_GEMM(nn.Module):
 
         return y1.reshape(cache.shape)
     
+
+

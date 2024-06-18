@@ -26,6 +26,7 @@ class FasterTransformerRMSNorm(nn.Module):
                 self.weight, 
                 output, self.variance_epsilon, 
                 self.next_layer.ind, self.cache.x_scale)
+
             elif self.next_layer.bit == 4:
                 self.cache.activation_outliers, self.cache.q_xcache = mixlib.layernorm_forward_cuda_extract_outliers_int4(x, 
                 self.weight, 

@@ -163,7 +163,7 @@ __global__ void generalT5LayerNorm_extract_outliers(
     __syncthreads();
 
     half *start = output_ ;
-    __shared__ half sdata[size];
+    __shared__ half sdata[256];
     sdata[tid] = __habs(output_[tid]); 
     for (int i = tid + size; i < n; i += size)
         sdata[tid] = __hmax ( __habs(start[i]),  sdata[tid] ); 
@@ -310,7 +310,7 @@ void invokeGeneralT5LayerNorm_extract_outliers(T* out,
     block.x = block.x / (4 / sizeof(T));  // if using half, only need half of block.x
 
     /* should pay attention to the rsqrt precision*/
-    generalT5LayerNorm_extract_outliers<T,1024/4><<<grid, block>>>
+    generalT5LayerNorm_extract_outliers<T,1024/4><<<grid, block, 1024, at::cuda::getCurrentCUDAStream()>>>
     (input, gamma, out, layernorm_eps, m, n, outliers, ind, len_ind, output_i8, scales );  
 }
 std::vector<torch::Tensor>  layernorm_forward_cuda_extract_outliers(torch::Tensor &_input, torch::Tensor &_gamma, 

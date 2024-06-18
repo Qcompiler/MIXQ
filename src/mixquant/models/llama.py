@@ -16,6 +16,9 @@ class LlamaMixQForCausalLM(BaseForCausalLM):
         fuser.fuse_mlp(mix, MixGemmCache = cache)
         fuser.fuse_rmsnorm(MixGemmCache = cache)
 
+        # dev = int(torch.cuda.get_device_properties(0).major)
+        # if dev >= 9:
+        #     return 
 
         for layer in model.model.layers:
             layer.input_layernorm.next_layer = layer.self_attn.W_pack

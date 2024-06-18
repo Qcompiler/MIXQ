@@ -9,7 +9,7 @@ from collections import defaultdict
 from mixquant.utils.utils import clear_memory
 from mixquant.utils.calib_data import get_calib_dataset
 from mixquant.modules.linear import MixLinear_GEMM
-
+from mixquant.modules.qlinear import MixedQLinear
 from mixquant.utils.module import get_named_linears, set_op_by_name, weight_only_map, eightbit_only_name
 
 
@@ -75,7 +75,90 @@ class MixQuantizer:
             clear_memory()
  
 
+    def quantize_QUIK(self,weight_only = False):
+        for i in tqdm(range(len(self.modules)), desc="QUIK quant"):
 
+            self.modules[i] = self.modules[i].cuda()
+            named_linears = get_named_linears(self.modules[i])
+
+            clear_memory()
+
+            # Quantize weights
+            self._apply_quant_quik(self.modules[i], named_linears, weight_only, layer = i)
+            clear_memory()
+
+    def _apply_quant_quik(self, module, named_linears: Dict[str, nn.Linear], weight_only_, layer):
+
+        
+        if isinstance(self.model.config.architectures,list):
+            name = self.model.config.architectures[0]
+        else:
+            name = self.model.config.architectures
+        weight_only_name = weight_only_map[ name ]
+ 
+        for name, linear_layer in named_linears.items():
+
+
+            # NOTE: small regression in perplexity if linear layer uses .cpu().float()
+            linear_layer = linear_layer.cuda().half()
+
+            if self.version == 'QUIK':
+                q_linear_module = MixedQLinear
+
+            else:
+                raise NotImplementedError
+            
+            # for same small blocks we do not need the mixquant, we only use the weight only quant
+
+            bit_8_only = False
+
+
+                
+            w_bit = self.w_bit
+            assert w_bit == 4
+            for key in eightbit_only_name:
+                if key in  name:
+                    w_bit = 8
+                    bit_8_only = False 
+
+   
+            relative_path = "act_scales/%s.pt"%(self.model.config._name_or_path.split("/")[-1])
+            act_scales = torch.load(relative_path)
+            if 'opt' in self.model.config._name_or_path.split("/")[-1]:
+                layer_scales = act_scales['model.decoder.layers.{}.{}'.format(layer, name)]
+            else:
+
+                layer_scales = act_scales['model.layers.{}.{}'.format(layer, name)]
+
+            fp_features = 256
+            fp_indices = torch.sort(layer_scales)[1][-fp_features:]  
+            if bit_8_only is True:
+                  
+                w_bit = 8
+
+                scales =  (torch.max(torch.abs(linear_layer.weight.data), dim=1)[0].unsqueeze(1) / (
+                                127)).to(torch.float16).reshape((linear_layer.out_features, 1))
+                q_linear = q_linear_module.from_linear(linear_layer,
+                    weight_matrix=linear_layer.weight.data,
+                    weights_scales = scales,
+                    bits = 8,
+                    fp_indices = fp_indices
+                )
+            else:
+                scales =  (torch.max(torch.abs(linear_layer.weight.data), dim=1)[0].unsqueeze(1) / (
+                                7)).to(torch.float16).reshape((linear_layer.out_features, 1))
+                q_linear = q_linear_module.from_linear(linear_layer,
+                    weight_matrix = linear_layer.weight.data,
+                    weights_scales = scales,
+                    bits = 4,
+                    fp_indices = fp_indices
+                )
+
+            linear_layer.cpu()
+
+            set_op_by_name(module, name, q_linear)
+            clear_memory()
+            
     def _apply_quant(self, module, named_linears: Dict[str, nn.Linear], weight_only_, layer):
 
         

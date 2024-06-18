@@ -37,10 +37,15 @@ def prepare_data(_dataset_path = 'wikitext', _split='test', _text_column='text')
     """
     if _dataset_path == 'wikitext':
         _dataset_name = 'wikitext-2-raw-v1'
-    if _dataset_path == 'c4':
-        _dataset_name = 'realnewslike'        
-    # Load the dataset
-    data = load_dataset(_dataset_path, _dataset_name, split=_split)
+        data = load_dataset(_dataset_path, _dataset_name, split=_split)
+    
+    elif _dataset_path == 'c4':
+        _dataset_name = 'realnewslike'    
+        data = load_dataset(_dataset_path, _dataset_name, split=_split)   
+    else:
+        _dataset_name = 'wikitext-2-raw-v1'
+        data = load_dataset(os.path.join(_dataset_path,'wikitext'),
+                                _dataset_name, split=_split, cache_dir="/home/chenyidong/tmp") 
     # Format the text column of the dataset
     text_list = [' \n' if s == '' else s for s in data[_text_column]]
     return ''.join(text_list)
@@ -157,6 +162,7 @@ def run_round(model_path, quant_file, n_generate, token, batch_size, safetensors
             device_map='auto', trust_remote_code=True
         )
         
+ 
 
 
     if model_type == 'bitsandbytes':
@@ -171,114 +177,16 @@ def run_round(model_path, quant_file, n_generate, token, batch_size, safetensors
 
 
     if model_type == 'quik':
-        args.fp_features_num = 256
-        sys.path.append("/home/chenyidong/quant/QUIK/experiments")
-        def get_fp_features_num(module: torch.nn.Linear, args):
-            fp_features_num = args.fp_features_num
-            return fp_features_num
-        def llama_replace_with_kernels(model, args):
-            import modelutils
-            import quant_sim
-            import qlinear
-            layers = model.model.layers
-            shared_inputs = {}
-
-            print("Replace with INT4 kernels.")
-            for i in range(len(layers)):
-                opt_block = layers[i]
-                sequential = [
-                    ['self_attn.k_proj', 'self_attn.v_proj', 'self_attn.q_proj'],
-                    ['self_attn.o_proj'],
-                    ['mlp.up_proj', 'mlp.gate_proj'],
-                    ['mlp.down_proj']
-                ]
-                full = modelutils.find_layers(opt_block)
-                for j, layer_group in enumerate(sequential):
-                    subset = {n: full[n] for n in layer_group}
-                    shared_inputs[f"{i}.{j}"] = qlinear.SharedQuantizedInput(len(layer_group))
-                    for name in subset:
-                        layer = subset[name]
-                        if 'lm_head' in name or 'rotary_emb' in name:
-                            continue
-                        is_quantized = False
-                        bits = 16
-                        fp_features = 0
-
-                        if isinstance(layer, quant_sim.ActQuantWrapper):
-                            if layer.quantizer.configured:
-                                is_quantized = True
-                                bits = layer.quantizer.bits
-                                fp_features = layer.fp_features_num
-                            layer = layer.module
-                        layer_weight = layer.weight.data
-
-                        layer_scale = save_dict['model.layers.{}.{}.scale'.format(i, name)]
-                        if fp_features == 0:
-                            fp_feature_idx = None
-                        else:
-                            print('---------------save  act_scales----------------')
-                            layer_act_scales = act_scales['model.layers.{}.{}'.format(i, name)]
-                            fp_feature_idx = torch.sort(layer_act_scales)[1][-fp_features:]
-
-                        if is_quantized:
-                            int_mod = qlinear.MixedQLinear.from_float(layer, layer_weight, layer_scale,
-                                                                    shared_inputs[f"{i}.{j}"], fp_feature_idx,
-                                                                    bits=bits)
-                        else:
-                            int_mod = layer
-                        modelutils.replace_single_mod_opt(opt_block, name, int_mod)
-
-
-
-        import modelutils, quant_sim  
-        model = modelutils.get_llama(args.model_path, args.batch_size, "")
-        print("Load quantized model from ", args.quant_file)
-        save_dict = torch.load(args.quant_file)
-        model.load_state_dict(save_dict["model"])   
-        model.config.use_cache = True
-        model = model.to('cuda')
-        cache = {'past': None}
-        def clear_past(i):
-            def tmp(layer, inp, out):
-                if cache['past']:
-                    cache['past'][i] = None
-            return tmp
-        for i, layer in enumerate(model.model.layers):
-            layer.register_forward_hook(clear_past(i))        
-
+        from mixquant import AutoForCausalLM
+        model = AutoForCausalLM.from_quantized(
+            model_path, quant_file, fuse_layers=True,
+            max_new_tokens=n_generate, batch_size=batch_size,
+            safetensors=safetensors,
+            mix = True,
+            cache = mixlibcache
+        )
         
-        relative_path = "/home/chenyidong/quant/QUIK/experiments/act_scales/{}.pt".format(args.model_path.split('/')[-1])
-
-        print(relative_path)
-        act_scales = torch.load(relative_path)
-
-
- 
-        quant_sim.add_actquant(model)
-        layers = modelutils.find_layers(model)
-
-        for name in layers:
-            
-            bits = 4
-            if 'lm_head' in name or "rotary_emb" in name:
-                print(f'Skipping {name}\n')
-                continue 
-            
-            
-            if 'down_proj' in name:
-                bits = 8       
-            
-            if args.fp_features_num > 0 :
-                fp_features_num = get_fp_features_num(layers[name].module, args)
-                if "qkv" in name:
-                    act_name = name.replace("qkv", "q")
-                else:
-                    act_name = name
-                layers[name].fp_features_configure(act_scales[act_name], fp_features_num)
-            layers[name].quantizer.configure(bits=bits)
-
-        llama_replace_with_kernels(model, args)    
-        model = model.to('cuda')
+        
 
 
     print(model)
@@ -315,18 +223,15 @@ def run_round(model_path, quant_file, n_generate, token, batch_size, safetensors
         "Batch Size": batch_size,
         "Decode Length": n_generate,
         "Decode tokens/s": decode_tokens_per_second,
-        "Memory (VRAM)": f"{memory_used:.2f} GB ({memory_pct:.2f}%)"
+        "Memory (VRAM)": f"{memory_used:.2f} GB ({memory_pct:.2f}%)",
+        "latency" : float(np.median(generate_time))
     }, args.model_type
 
 def main(args):
     rounds = [
-        # {"context": 32, "n_generate": 32},
-        # {"context": 64, "n_generate": 64},
-        # {"context": 128, "n_generate": 128},
-        # {"context": 256, "n_generate": 256},
-        # {"context": 512, "n_generate": 512},
+
         {"context": args.seq_length, "n_generate": args.seq_length},
-        # {"context": 2048, "n_generate": 2048},
+
     ]
 
     all_stats = []
@@ -334,7 +239,7 @@ def main(args):
     cache = MixLibCache(bit=args.bit)
 
     print("downloading data......")
-    text = prepare_data()
+    text = prepare_data(args.dataset_path)
     print("done......")
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, use_fast=args.use_fast_tokenizer, trust_remote_code=True)
@@ -387,13 +292,14 @@ if __name__ == "__main__":
 
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_path", type=str, default="casperhansen/vicuna-7b-v1.5-awq", help="path to the model")
-    parser.add_argument("--quant_file", type=str, default="awq_model_w4_g128.pt", help="weights filename")
+    parser.add_argument("--model_path", type=str, default="", help="path to the model")
+    parser.add_argument("--quant_file", type=str, default="", help="weights filename")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size for cache and generation")
-    parser.add_argument("--model_type", type=str, default="awq")
+    parser.add_argument("--model_type", type=str, default="fp16")
     parser.add_argument("--safetensors", default=False, action="store_true", help="Use for enabling safetensors")
     parser.add_argument("--use_fast_tokenizer", action="store_true", help="Wheter to use fast tokenizer")
-    parser.add_argument("--seq_length", type=int, default=512)
+    parser.add_argument("--seq_length", type=int, default=128)
+    parser.add_argument("--dataset_path", type=str, default='wikitext', help="Path to the dataset.")
     parser.add_argument("--bit", type=int, default=8)
     args = parser.parse_args()
 

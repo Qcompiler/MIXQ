@@ -172,8 +172,8 @@ if __name__ == "__main__":
         from awq import AutoAWQForCausalLM
         model = AutoAWQForCausalLM.from_quantized(
             model_path, quant_file, fuse_layers=True,
-            max_new_tokens=n_generate, batch_size=batch_size,
-            safetensors=safetensors
+            max_new_tokens=args.n_generate, batch_size=args.batch_size,
+            safetensors=args.safetensors
         )
     if args.model_type == 'fp16':    
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig

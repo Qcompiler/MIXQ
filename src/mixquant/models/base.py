@@ -11,6 +11,9 @@ from huggingface_hub import snapshot_download
 
 from transformers.modeling_utils import shard_checkpoint
 from mixquant.modules.linear import   MixLinear_GEMM
+
+from mixquant.modules.qlinear import   MixedQLinear
+
 from mixquant.utils.module import get_named_linears, set_op_by_name, weight_only_map,eightbit_only_name
 from transformers import AutoModelForCausalLM, AutoConfig, PreTrainedModel
 from accelerate import init_empty_weights, load_checkpoint_in_model, infer_auto_device_map
@@ -48,6 +51,22 @@ class BaseForCausalLM(nn.Module):
             self, self.model, tokenizer, quant_config["w_bit"], quant_config["q_group_size"],
             quant_config["version"])
         quantizer.quantize()
+        self.is_quantized = True
+
+
+    @torch.no_grad()
+    def quantize_quik(self, tokenizer=None, quant_config={},
+                       calib_data: Union[str, List[str]]="pileval", 
+                       split="train", text_column="text"):
+        self.quant_config = quant_config
+        quant_config["version"] = "QUIK"
+        quant_config["q_group_size"] = -1
+        from  mixquant.quantize.mixquant import MixQuantizer
+
+        quantizer = MixQuantizer(
+            self, self.model, tokenizer, quant_config["w_bit"], quant_config["q_group_size"],
+            quant_config["version"])
+        quantizer.quantize_QUIK()
         self.is_quantized = True
 
     @staticmethod
@@ -154,10 +173,17 @@ class BaseForCausalLM(nn.Module):
         with init_empty_weights():
             model = AutoModelForCausalLM.from_config(config=config, torch_dtype=torch_dtype, trust_remote_code=trust_remote_code)
         
-
+  
         if mix is True:
-            print("-------------mix----------")
-            self._load_mix_quantized_modules(self, model, cache)    
+            if self.quant_config["version"] == "QUIK":
+                print("-------------quik----------")
+                self._load_quik_quantized_modules(self, model, cache)
+                fuse_layers = False   
+                
+            else:
+
+                print("-------------mix----------")
+                self._load_mix_quantized_modules(self, model, cache)    
         else:
             raise NotImplementedError
         
@@ -184,10 +210,11 @@ class BaseForCausalLM(nn.Module):
         )
         
         # Dispath to devices
+
         if fuse_layers:
             self.fuse_layers(model, quant_config, mix, cache)
 
-        # Offloading dispatch
+            # Offloading dispatch
         from accelerate import dispatch_model
         model = dispatch_model(
             model,
@@ -296,6 +323,7 @@ class BaseForCausalLM(nn.Module):
 
  
                 q_linear.to(next(layer.parameters()).device)
+                
                 set_op_by_name(layer, name, q_linear)
 
 
@@ -303,3 +331,58 @@ class BaseForCausalLM(nn.Module):
             gc.collect()
 
 
+
+    def _load_quik_quantized_modules(self, model, MixGemmcache):
+            # Real quantization of weights
+
+            # Get blocks of model
+            layers = self.get_model_layers(model)
+
+            if isinstance(model.config.architectures,list):
+                name = model.config.architectures[0]
+            else:
+                name = model.config.architectures
+            weight_only_name = weight_only_map[ name ]
+            for i in tqdm(range(len(layers)), desc="Replacing quik layers..."):
+                layer = layers[i]
+
+                # Get every linear layer in a block
+                named_linears = get_named_linears(layer)
+
+                
+                for name, module in named_linears.items():
+
+
+                    weight_8bit_only = False
+
+ 
+ 
+
+                    for key in eightbit_only_name:
+                        if key in  name:
+                            weight_8bit_only = False 
+
+
+                
+                    if weight_8bit_only is True:
+
+                        q_linear =  MixedQLinear.from_linear(module,
+                                    module.in_features, module.out_features,  
+                                    fp_features_num=256, init_only = True,
+                                    bits=8)
+
+
+                    else:
+                        q_linear =  MixedQLinear.from_linear(module,
+                                    module.in_features, module.out_features,  
+                                    fp_features_num=256, 
+                                    init_only = True,
+                                    bits=4)
+
+                    
+                    q_linear.to(next(layer.parameters()).device)
+                    set_op_by_name(layer, name, q_linear)
+
+
+                torch.cuda.empty_cache()
+                gc.collect()

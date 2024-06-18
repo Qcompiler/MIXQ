@@ -113,12 +113,10 @@ if __name__ == "__main__":
     parser.add_argument("--trust_remote_code", action="store_true", help="Whether to use remote code")
     parser.add_argument("--disable_exllama", action="store_true", help="Whether to use disable exllama kernel")
 
-    parser.add_argument('--a_bits', type=int, default=4, choices=[4, 8, 16])
 
     # Weight Quantization Params: 
     parser.add_argument('--w_bits', type=int, default=16, choices=[4, 8, 16])
-    parser.add_argument('--w_clip', action='store_true', help='Use clipping for weight quantization')
-    parser.add_argument('--w_asym', action='store_true')
+
     
     parser.add_argument('--int8_down_proj', action='store_true', help='Use INT8 for Down Projection')
     parser.add_argument('--fp_features_frac', type=float, default=None, help='Fraction of features to keep in FP16.')    
