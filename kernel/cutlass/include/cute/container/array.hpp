@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -41,13 +41,14 @@ namespace cute
 template <class T, size_t N>
 struct array
 {
-  using value_type = T;
+  using element_type = T;
+  using value_type = remove_cv_t<T>;
   using size_type = size_t;
   using difference_type = ptrdiff_t;
-  using reference = value_type&;
-  using const_reference = const value_type&;
-  using pointer = value_type*;
-  using const_pointer = const value_type*;
+  using reference = element_type&;
+  using const_reference = const element_type&;
+  using pointer = element_type*;
+  using const_pointer = const element_type*;
   using iterator = pointer;
   using const_iterator = const_pointer;
 
@@ -190,22 +191,23 @@ struct array
     }
   }
 
-  value_type __elems_[N > 0 ? N : 1];
+  element_type __elems_[N];
 };
 
 
 template <class T>
 struct array<T, 0>
 {
-  using value_type = T;
+  using element_type = T;
+  using value_type = remove_cv_t<T>;
   using size_type = size_t;
   using difference_type = ptrdiff_t;
-  using reference = value_type&;
-  using const_reference = const value_type&;
-  using pointer = value_type*;
-  using const_pointer = const value_type*;
+  using reference = element_type&;
+  using const_reference = const element_type&;
+  using pointer = element_type*;
+  using const_pointer = const element_type*;
   using const_iterator = const_pointer;
-  using iterator = const_iterator;
+  using iterator = pointer;
 
   CUTE_HOST_DEVICE constexpr
   reference operator[](size_type pos)
@@ -353,7 +355,7 @@ void clear(array<T,N>& a)
   a.fill(T(0));
 }
 
-template <typename T, size_t N>
+template <class T, size_t N>
 CUTE_HOST_DEVICE constexpr
 void fill(array<T,N>& a, T const& value)
 {
@@ -368,14 +370,14 @@ void swap(array<T,N>& a, array<T,N>& b)
 }
 
 /// @return A cute::array of the elements of @c t in reverse order.
-template <typename T, size_t N>
-CUTE_HOST_DEVICE constexpr cute::array<T, N>
-reverse(cute::array<T, N> const& t) {
+template <class T, size_t N>
+CUTE_HOST_DEVICE constexpr
+cute::array<T,N> reverse(cute::array<T,N> const& t) 
+{
   if constexpr (N == 0u) {
     return t;
-  }
-  else {
-    cute::array<T, N> t_r{};
+  } else {
+    cute::array<T,N> t_r{};
     for (size_t k = 0; k < N; ++k) {
       t_r[k] = t[N - k - 1];
     }
@@ -420,7 +422,7 @@ CUTE_HOST_DEVICE constexpr
 T&& get(array<T,N>&& a)
 {
   static_assert(I < N, "Index out of range");
-  return std::move(a[I]);
+  return cute::move(a[I]);
 }
 
 } // end namespace cute
@@ -440,12 +442,12 @@ struct tuple_element<I, cute::array<T,N>>
 };
 
 template <class T, size_t N>
-struct tuple_size<const cute::array<T,N>>
+struct tuple_size<cute::array<T,N> const>
     : CUTE_STL_NAMESPACE::integral_constant<size_t, N>
 {};
 
 template <size_t I, class T, size_t N>
-struct tuple_element<I, const cute::array<T,N>>
+struct tuple_element<I, cute::array<T,N> const>
 {
   using type = T;
 };
@@ -460,7 +462,7 @@ namespace std
 template <class... _Tp>
 struct tuple_size;
 
-template<size_t _Ip, class... _Tp>
+template <size_t _Ip, class... _Tp>
 struct tuple_element;
 #endif
 
@@ -476,12 +478,12 @@ struct tuple_element<I, cute::array<T,N>>
 };
 
 template <class T, size_t N>
-struct tuple_size<const cute::array<T,N>>
+struct tuple_size<cute::array<T,N> const>
     : CUTE_STL_NAMESPACE::integral_constant<size_t, N>
 {};
 
 template <size_t I, class T, size_t N>
-struct tuple_element<I, const cute::array<T,N>>
+struct tuple_element<I, cute::array<T,N> const>
 {
   using type = T;
 };

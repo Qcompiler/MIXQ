@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -444,7 +444,7 @@ class gen_kernel:
 
         self.gen_class_name = "B2bGemm"
         self.gen_kernel_name = gen_class_name + "Kernel"
-        self.tempalte_args = []
+        self.template_args = []
 
         self.cutlass_deps_root = cutlass_deps_root
         self.project_root = project_root

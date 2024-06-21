@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -42,8 +42,8 @@
 namespace cutlass {
 
 __global__ void rmsnorm_twoPassAlgo_e8(float4 *output, const float4 *input,
-				       const float4 *weight,
-				       const int m, const int n, float epsilon) {
+                                       const float4 *weight,
+                                       const int m, const int n, float epsilon) {
   const int m_idx = blockIdx.x;
   const int tid = threadIdx.x;
   const int bdimx = blockDim.x;
@@ -115,10 +115,10 @@ __global__ void rmsnorm_twoPassAlgo_e8(float4 *output, const float4 *input,
 
 template<typename T>
 __global__ void rmsnorm_twoPassAlgo_e1(T* output,
-				       const T* input,
-				       const T* weight,
-				       const int m, const int n,
-				       float epsilon)
+                                       const T* input,
+                                       const T* weight,
+                                       const int m, const int n,
+                                       float epsilon)
 {
   const int m_idx = blockIdx.x;
   const int tid = threadIdx.x;
@@ -156,7 +156,7 @@ void rmsnorm(cutlass::MatrixCoord tensor_size,
              TensorRef<T, layout::RowMajor> ref_output,
              TensorRef<T, layout::RowMajor> ref_input,
              TensorRef<T, layout::RowMajor> ref_weight,
-             cudaStream_t stream, float epsilon = 1e-5){
+             cudaStream_t stream, float epsilon = 1e-5f){
   const int m = tensor_size.row();
   const int n = tensor_size.column();
   T* output = ref_output.data();

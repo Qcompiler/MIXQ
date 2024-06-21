@@ -12,7 +12,7 @@ from huggingface_hub import snapshot_download
 from transformers.modeling_utils import shard_checkpoint
 from mixquant.modules.linear import   MixLinear_GEMM
 
-from mixquant.modules.qlinear import   MixedQLinear
+#from mixquant.modules.qlinear import   MixedQLinear
 
 from mixquant.utils.module import get_named_linears, set_op_by_name, weight_only_map,eightbit_only_name
 from transformers import AutoModelForCausalLM, AutoConfig, PreTrainedModel

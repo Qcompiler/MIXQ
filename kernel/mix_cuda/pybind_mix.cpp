@@ -245,7 +245,18 @@ std::vector<torch::Tensor>  layernorm_forward_cuda_extract_outliers_int4(torch::
                 torch::Tensor &_out, float eps, torch::Tensor &_ind,  torch::Tensor &scaleRow);
 
 
+torch::Tensor MixgemmDenseFusedequantSM90(
+    const torch::Tensor& mat1, //fp16
+    const torch::Tensor& mat2,  //fp16
+    const torch::Tensor& scale_a, //fp16
+    const torch::Tensor& scale_b,  //fp16
+    const torch::Tensor& C // int32
+    );
 
+void cutlass_scaled_mm_dq_sm90(torch::Tensor &out, torch::Tensor const &a,
+                               torch::Tensor const &b,
+                               torch::Tensor const &a_scales,
+                               torch::Tensor const &b_scales);
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("cigemmlt_ampere_32", &cigemmlt_ampere_32, "cigemmlt_ampere_32");
     m.def("get_context", &get_context, "get_context");
@@ -259,6 +270,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("MixAsyncStage4", &MixAsyncStage4, "MixAsyncStage4");
     m.def("Mixgemmalligned", &Mixgemmalligned, "Mixgemmalligned");
     m.def("Mixgemmallignedfp16int8", &Mixgemmallignedfp16int8, "Mixgemmallignedfp16int8");
+    m.def("MixgemmDenseFusedequantSM90", &MixgemmDenseFusedequantSM90, "MixgemmDenseFusedequantSM90");
+    m.def("cutlass_scaled_mm_dq_sm90", &cutlass_scaled_mm_dq_sm90, "cutlass_scaled_mm_dq_sm90");
+    
     //m.def("MixGemmCutlass", &MixGemmCutlass, "MixGemmCutlass");
     //m.def("get_workspace_size", &get_workspace_size, "get_workspace_size");
 

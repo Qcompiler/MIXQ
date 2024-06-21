@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -207,15 +207,15 @@ cudaError_t strided_batched_gemm_nn_reference(
   
   cudaError_t result = cudaSuccess;
 
-  if (A.size() < lda * k * batch_count) {
+  if (A.size() < size_t(lda * k * batch_count)) {
     std::cout << "the size of A is too small" << std::endl;
     return cudaErrorInvalidValue;
   }
-  if (B.size() < ldb * n) {
+  if (B.size() < size_t(ldb * n)) {
     std::cout << "the size of B is too small" << std::endl;
     return cudaErrorInvalidValue;
   }
-  if (C.size() < ldc * n * batch_count) {
+  if (C.size() < size_t(ldc * n * batch_count)) {
     std::cout << "the size of C is too small" << std::endl;
     return cudaErrorInvalidValue;
   }

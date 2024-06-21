@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -44,7 +44,6 @@
 #include "cutlass/trace.h"
 
 #include "cute/tensor.hpp"
-
 ///////////////////////////////////////////////////////////////////////////////
 
 namespace cutlass::gemm::kernel {
@@ -69,9 +68,8 @@ public:
   // Type Aliases
   //
   using ProblemShape = ProblemShape_;
-  static_assert(rank(ProblemShape{}) == 3 or rank(ProblemShape{}) == 4,
+  static_assert(cute::rank(ProblemShape{}) == 3 or cute::rank(ProblemShape{}) == 4,
     "ProblemShape{} should be <M,N,K> or <M,N,K,L>");
-
   // Mainloop derived types
   using CollectiveMainloop = CollectiveMainloop_;
   using TileShape = typename CollectiveMainloop::TileShape;
@@ -128,7 +126,7 @@ public:
 
   static constexpr uint32_t NumLoadWarpGroups = 1;
   static constexpr uint32_t NumMmaWarpGroups = 1;
-  static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{}) + (NumLoadWarpGroups * NumThreadsPerWarpGroup);
+  static constexpr uint32_t MaxThreadsPerBlock = CUTE_STATIC_V(size(TiledMma{})) + (NumLoadWarpGroups * NumThreadsPerWarpGroup);
   static constexpr uint32_t MinBlocksPerMultiprocessor = 1;
 
   // Device side arguments
@@ -143,10 +141,10 @@ public:
 
   // Kernel entry point API
   struct Params {
-    GemmUniversalMode mode;
-    ProblemShape problem_shape;
-    MainloopParams mainloop;
-    EpilogueParams epilogue;
+    GemmUniversalMode mode{};
+    ProblemShape problem_shape{};
+    MainloopParams mainloop{};
+    EpilogueParams epilogue{};
   };
 
   //
@@ -176,25 +174,28 @@ public:
   bool
   can_implement(Arguments const& args) {
     bool implementable = (args.mode == GemmUniversalMode::kGemm) or
-        (args.mode == GemmUniversalMode::kBatched && rank(ProblemShape{}) == 4);
+        (args.mode == GemmUniversalMode::kBatched && cute::rank(ProblemShape{}) == 4);
     if (!implementable) {
       CUTLASS_TRACE_HOST("  CAN IMPLEMENT: Arguments or Problem Shape don't meet the requirements.\n");
       return implementable;
     }
     implementable &= CollectiveMainloop::can_implement(args.problem_shape, args.mainloop);
     implementable &= CollectiveEpilogue::can_implement(args.problem_shape, args.epilogue);
+    implementable &= TileScheduler::can_implement(args.scheduler);
+
     return implementable;
   }
 
   static
-  int
+  size_t
   get_workspace_size(Arguments const& args) {
     return 0;
   }
 
   static
   cutlass::Status
-  initialize_workspace(Arguments const& args, void* workspace = nullptr, cudaStream_t stream = nullptr) {
+  initialize_workspace(Arguments const& args, void* workspace = nullptr, cudaStream_t stream = nullptr,
+    CudaHostAdapter* cuda_adapter = nullptr) {
     return Status::kSuccess;
   }
 
@@ -219,13 +220,10 @@ public:
     using namespace cute;
     using X = Underscore;
 
-    // Any Tensor Op MMA Atom in the WGMMA ISA is arch conditional to sm90a.
-    #if ! defined(__CUDA_ARCH_FEAT_SM90_ALL)
-      if constexpr(size<0>(typename TiledMma::AtomShape_MNK{}) == 64) {
-        printf("ERROR : Arch conditional MMA instruction used without targeting sm90a compute capability. Aborting.\n");
-        return;
-      }
-    #endif
+// Any Tensor Op MMA Atom in the WGMMA ISA is arch conditional to sm90a.
+#if ! defined(__CUDA_ARCH_FEAT_SM90_ALL)
+    printf("ERROR : Arch conditional MMA instruction used without targeting sm90a compute capability. Aborting.\n");
+#else
 
     enum class WarpGroupRole {
       Producer = 0,
@@ -270,7 +268,7 @@ public:
     mainloop_pipeline_params.is_leader = warp_group_thread_idx == 0;
     mainloop_pipeline_params.num_consumers = NumThreadsPerWarpGroup;
     mainloop_pipeline_params.transaction_bytes = CollectiveMainloop::TmaTransactionBytes;
-    MainloopPipeline mainloop_pipeline(shared_storage.pipelines.mainloop, mainloop_pipeline_params);
+    MainloopPipeline mainloop_pipeline(shared_storage.pipelines.mainloop, mainloop_pipeline_params, ClusterShape{});
 
     // Epilogue Load pipeline
     using EpiLoadPipeline = typename CollectiveEpilogue::LoadPipeline;
@@ -318,31 +316,31 @@ public:
     } ();
 
     // Preconditions
-    static_assert(rank(StrideA{}) == 3, "StrideA must be rank-3: [M, K, L]. If batch mode is not needed, set L stride to Int<0>.");
-    static_assert(rank(StrideB{}) == 3, "StrideB must be rank-3: [N, K, L]. If batch mode is not needed, set L stride to Int<0>.");
-    static_assert(rank(StrideC{}) == 3, "StrideC must be rank-3: [M, N, L]. If batch mode is not needed, set L stride to Int<0>.");
-    static_assert(rank(StrideD{}) == 3, "StrideD must be rank-3: [M, N, L]. If batch mode is not needed, set L stride to Int<0>.");
+    static_assert(cute::rank(StrideA{}) == 3, "StrideA must be rank-3: [M, K, L]. If batch mode is not needed, set L stride to Int<0>.");
+    static_assert(cute::rank(StrideB{}) == 3, "StrideB must be rank-3: [N, K, L]. If batch mode is not needed, set L stride to Int<0>.");
+    static_assert(cute::rank(StrideC{}) == 3, "StrideC must be rank-3: [M, N, L]. If batch mode is not needed, set L stride to Int<0>.");
+    static_assert(cute::rank(StrideD{}) == 3, "StrideD must be rank-3: [M, N, L]. If batch mode is not needed, set L stride to Int<0>.");
 
-    // Separate out problem shape for convenience
-    // Optionally append 1s until problem shape is rank-4 in case its is only rank-3 (MNK)
+    // Optionally append 1s until problem shape is rank-4 in case it is only rank-3 (MNK)
     auto problem_shape_MNKL = append<4>(params.problem_shape, Int<1>{});
-    auto M = get<0>(problem_shape_MNKL);
-    auto N = get<1>(problem_shape_MNKL);
-    auto K = get<2>(problem_shape_MNKL);
-    auto L = get<3>(problem_shape_MNKL);
-
-    // TMA requires special handling of strides to deal with coord codomain mapping
-    // Represent the full tensors -- get these from TMA
-    Tensor mA_mkl = params.mainloop.tma_load_a.get_tma_tensor(make_shape(M,K,L));                            // (m,k,l)
-    Tensor mB_nkl = params.mainloop.tma_load_b.get_tma_tensor(make_shape(N,K,L));                            // (n,k,l)
 
     // Get the appropriate blocks for this thread block -- potential for thread block locality
     auto blk_shape = TileShape{};                                                                // (BLK_M,BLK_N,BLK_K)
     TiledMma tiled_mma;
 
-    // Make tiled views, defer the slice
-    Tensor gA_mkl = local_tile(mA_mkl, blk_shape, make_coord(_,_,_), Step<_1, X,_1>{});          // (BLK_M,BLK_K,m,k,l)
-    Tensor gB_nkl = local_tile(mB_nkl, blk_shape, make_coord(_,_,_), Step< X,_1,_1>{});          // (BLK_N,BLK_K,n,k,l)
+    // In a warp specialized kernel, collectives expose data movement and compute operations separately
+    CollectiveMainloop collective_mainloop;
+    CollectiveEpilogue collective_epilogue(params.epilogue, shared_storage.tensors.epilogue);
+
+    // Prepare and partition the input tensors. Expects a tuple of tensors where:
+    // get<0>(load_inputs) is the tma tensor A after local tiling so that it has shape (BLK_M,BLK_K,m,k,l)
+    // get<1>(load_inputs) is the tma tensor B after local tiling so that it has shape (BLK_N,BLK_K,n,k,l)
+    auto load_inputs = collective_mainloop.load_init(problem_shape_MNKL, params.mainloop);
+    static_assert(cute::tuple_size_v<decltype(load_inputs)> >= 2, "Output of load_init must have at least two elements (A, B)");
+
+    // Extract out partitioned A and B.
+    Tensor gA_mkl = get<0>(load_inputs);
+    Tensor gB_nkl = get<1>(load_inputs);
 
     // Compute m_coord, n_coord, and l_coord with their post-tiled shapes
     auto m_coord = idx2crd(int(blockIdx.x), shape<2>(gA_mkl));
@@ -350,28 +348,21 @@ public:
     auto l_coord = idx2crd(int(blockIdx.z), shape<4>(gB_nkl));
     auto blk_coord = make_coord(m_coord, n_coord, _, l_coord);
 
-    // Slice with m_coord and n_coord
-    Tensor gA = gA_mkl(_,_,m_coord,_,l_coord);                                                       // (BLK_M,BLK_K,k)
-    Tensor gB = gB_nkl(_,_,n_coord,_,l_coord);                                                       // (BLK_N,BLK_K,k)
-
     // Get pipeline iterators and increments from tensor shapes
-    auto k_tile_iter  = cute::make_coord_iterator(shape<2>(gA));
-    auto k_tile_count = size<2>(gA);
+    auto k_tile_iter  = cute::make_coord_iterator(shape<3>(gA_mkl));
+    auto k_tile_count = size<3>(gA_mkl);
 
     // Wait for all thread blocks in the Cluster
     cluster_wait_fn();
 
-    // In a warp specialized kernel, collectives expose data movement and compute operations separately
-    CollectiveMainloop collective_mainloop;
-    CollectiveEpilogue collective_epilogue(params.epilogue, shared_storage.tensors.epilogue);
-
     if (warp_group_role == WarpGroupRole::Producer) {
       if (producer_warp_role == ProducerWarpRole::MainloopEpilogue) {
         collective_mainloop.load(
+          params.mainloop,
           mainloop_pipeline,
           mainloop_pipe_producer_state,
-          gA, params.mainloop.tma_load_a,
-          gB, params.mainloop.tma_load_b,
+          load_inputs,
+          blk_coord,
           k_tile_iter, k_tile_count,
           lane_idx,
           block_rank_in_cluster,
@@ -385,8 +376,7 @@ public:
         if (collective_epilogue.is_producer_load_needed()) {
           // Ensure warp is converged before issuing epilogue loads
           __syncwarp();
-          epi_load_pipe_producer_state =
-          collective_epilogue.load(
+          epi_load_pipe_producer_state = collective_epilogue.load(
             epi_load_pipeline,
             epi_load_pipe_producer_state,
             problem_shape_MNKL,
@@ -408,7 +398,7 @@ public:
         mainloop_pipe_consumer_state,
         accumulators,
         k_tile_count,
-        thread_idx,
+        warp_group_thread_idx,
         shared_storage.tensors.mainloop,
         params.mainloop
       );
@@ -443,6 +433,7 @@ public:
         epi_store_pipe_producer_state_next
       );
     }
+#endif
   }
 };
 

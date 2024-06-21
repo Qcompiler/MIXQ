@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -46,8 +46,10 @@ from utils import LayoutCombination, add_test_gemm
 
 cutlass.set_log_level(logging.WARNING)
 cc = 90
+dtype = cutlass.DataType.f16
 
 @unittest.skipIf(device_cc() < cc, 'Device compute capability is insufficient for SM90 tests.')
+@unittest.skipIf(cutlass.utils.datatypes.torch_type(dtype) is None, f'Version of torch installed does not contain a datatype match for {dtype}')
 class GemmF16Sm90(unittest.TestCase):
     """
     Wrapper class to which tests will be added dynamically in __main__
@@ -55,7 +57,7 @@ class GemmF16Sm90(unittest.TestCase):
     pass
 
 
-add_test_specialized = partial(add_test_gemm, cls=GemmF16Sm90, element=cutlass.DataType.f16,
+add_test_specialized = partial(add_test_gemm, cls=GemmF16Sm90, element=dtype,
                                warp_count=None, compilation_modes=['nvcc'])
 
 add_test_tensorop = partial(add_test_specialized, opclass=cutlass.OpcodeClass.TensorOp)
@@ -135,6 +137,10 @@ add_test_simt(layouts=LayoutCombination.NTN, element_output=cutlass.DataType.f16
 add_test_simt(layouts=LayoutCombination.TTN, element_output=cutlass.DataType.f16, element_accumulator=cutlass.DataType.f32, threadblock_shape=[ 64,  64, 8])
 add_test_simt(layouts=LayoutCombination.NNT, element_output=cutlass.DataType.f16, element_accumulator=cutlass.DataType.f16, threadblock_shape=[128, 128, 8])
 
+# Tests with void-C kernels
+add_test_cluster_shape(layouts=LayoutCombination.NNT, alignments=[8, 8, 8], element_output=cutlass.DataType.f16,
+                       element_accumulator=cutlass.DataType.f32, threadblock_shape=[128, 128, 32], stages=None,
+                       cluster_shape=[2, 1, 1], element_C=cutlass.DataType.void)
 
 if __name__ == '__main__':
     unittest.main()

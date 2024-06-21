@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -275,7 +275,7 @@ struct Testbed {
     nvrtcAddNameExpression(program, gemm_kernel_instantiation.c_str());
 
     const char *opts[] = {"--gpu-architecture=compute_75",
-                          "--std=c++11",
+                          "--std=c++17",
                           "--include-path=/usr/local/cuda-10.1/include"};
 
     result_nvrtc = nvrtcCompileProgram(program, 3, opts);

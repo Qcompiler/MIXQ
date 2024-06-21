@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -265,6 +265,10 @@ constexpr int NumStages = 3;
 // Which iterator algorithm to use: Analytic or Optimized
 static cutlass::conv::IteratorAlgorithm const IteratorAlgorithm = cutlass::conv::IteratorAlgorithm::kOptimized;
 
+// Is the output packed or strided
+// Use kStride if using strided output
+static cutlass::conv::StrideSupport const OutputStride = cutlass::conv::StrideSupport::kUnity;
+
 // The epilogue part of the kernel
 using EpilogueOp = cutlass::epilogue::thread::LinearCombination<
     ElementOutput,                                     // Data type of output matrix.
@@ -289,7 +293,8 @@ using Conv2dFpropKernel = typename cutlass::conv::kernel::DefaultConv2dFprop<
   SwizzleThreadBlock,
   NumStages,
   cutlass::arch::OpMultiplyAdd,
-  IteratorAlgorithm
+  IteratorAlgorithm,
+  OutputStride
 >::Kernel;
 
 // Type of the actual kernel

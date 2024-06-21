@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -131,8 +131,8 @@ public:
 
     std::array<uint32_t, 5> kNumIters;
 
-    for (int i = 0; i < kNumIters.size(); ++i) {
-      kNumIters[i] = (rand() % 1000) + 1;
+    for (size_t i = 0; i < kNumIters.size(); ++i) {
+      kNumIters[i] = static_cast<uint32_t>( (rand() % 1000) + 1 );
     }
 
     for (int n : kNumIters) {

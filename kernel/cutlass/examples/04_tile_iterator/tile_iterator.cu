@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -94,7 +94,7 @@ __global__ void copy(
 
     typename Iterator::Fragment fragment;
 
-    for(int i = 0; i < fragment.size(); ++i) {
+    for(size_t i = 0; i < fragment.size(); ++i) {
       fragment[i] = 0;
     }
 

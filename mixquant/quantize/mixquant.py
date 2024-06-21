@@ -254,6 +254,7 @@ class MixQuantizer:
                 )
 
             linear_layer.cpu()
+            q_linear = q_linear.cpu()
 
             set_op_by_name(module, name, q_linear)
             clear_memory()

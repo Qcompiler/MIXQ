@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -35,34 +35,38 @@
 
 #include <cute/tensor.hpp>
 
-template <class Layout, class CoSizeHi>
+template <class Layout, class CoTarget>
 void
-test_complement(Layout const& layout, CoSizeHi const& cosize_hi)
+test_complement(Layout const& layout, CoTarget const& cotarget)
 {
   using namespace cute;
 
-  auto result = complement(layout, cosize_hi);
+  auto result = complement(layout, cotarget);
 
-  CUTLASS_TRACE_HOST("complement( " << layout << ", " << cosize_hi << ")  =>  " << result);
+  CUTLASS_TRACE_HOST("complement(" << layout << ", " << cotarget << ")  =>  " << result);
 
-  // Post-condition on the   domain size of the complement (1)
-  EXPECT_GE(  size(result), cosize_hi / size(filter(layout)));
-  // Post-condition on the codomain size of the complement (2)
-  EXPECT_LE(cosize(result), cute::ceil_div(cosize_hi, cosize(layout)) * cosize(layout));
+  auto completed = make_layout(layout, result);
+
+  // Lower-bound on the codomain size of the layout ++ complement (1)
+  EXPECT_GE(cosize(completed), size(cotarget));
+  // Upper-bound on the codomain size of the complement (2)
+  EXPECT_LE(cosize(result), cute::round_up(size(cotarget), cosize(layout)));
 
   // Post-condition on the codomain of the complement
   for (int i = 1; i < size(result); ++i) {
     EXPECT_LT(result(i-1), result(i));         // Ordered (3)
     for (int j = 0; j < size(layout); ++j) {
-      EXPECT_NE(result(i), layout(j));        // Complemented (4)
+      EXPECT_NE(result(i), layout(j));         // Disjoint (4)
     }
   }
 
   // Other observations
-  EXPECT_LE(size(result),cosize(result));                      // As a result of the ordered condition (3)
-  EXPECT_GE(cosize(result), cosize_hi / size(filter(layout)));  // As a result of (1) (2) and (5)
-  if constexpr (is_static<decltype(stride(make_layout(layout,result)))>::value) { // If we can apply complement again
-    EXPECT_EQ(size(complement(make_layout(layout,result))), 1);                    // There's no more codomain left over
+  EXPECT_LE(size(result), cosize(result));                        // As a result of the ordered condition (3)
+  EXPECT_GE(size(result), size(cotarget) / size(filter(layout)));
+  EXPECT_LE(cosize(completed), cosize(result) + cosize(layout));
+  EXPECT_GE(cosize(result), size(cotarget) / size(filter(layout)));
+  if constexpr (is_static<decltype(stride(completed))>::value) {  // If we can apply complement again
+    EXPECT_EQ(size(complement(completed)), 1);                    // There's no more codomain left over
   }
 }
 
@@ -86,6 +90,8 @@ TEST(CuTe_core, Complement)
 
   test_complement(layout);
   test_complement(layout, Int<2>{});
+  test_complement(layout, Int<5>{});
+  test_complement(layout, make_shape(Int<2>{}, 2));
   }
 
   {
@@ -93,6 +99,8 @@ TEST(CuTe_core, Complement)
 
   test_complement(layout);
   test_complement(layout, Int<2>{});
+  test_complement(layout, Int<5>{});
+  test_complement(layout, make_shape(Int<2>{}, 2));
   }
 
   {
@@ -101,6 +109,8 @@ TEST(CuTe_core, Complement)
   test_complement(layout, Int<1>{});
   test_complement(layout, Int<2>{});
   test_complement(layout, Int<8>{});
+  test_complement(layout, Int<5>{});
+  test_complement(layout, make_shape(Int<2>{}, 2));
   }
 
   {
@@ -125,6 +135,8 @@ TEST(CuTe_core, Complement)
   test_complement(layout, Int<1>{});
   test_complement(layout);
   test_complement(layout, Int<16>{});
+  test_complement(layout, Int<19>{});
+  test_complement(layout, make_shape(Int<2>{}, 2));
   }
 
   {
@@ -133,6 +145,7 @@ TEST(CuTe_core, Complement)
   test_complement(layout, Int<1>{});
   test_complement(layout);
   test_complement(layout, Int<17>{});
+  test_complement(layout, make_shape(Int<2>{}, 2));
   }
 
   {
@@ -154,6 +167,12 @@ TEST(CuTe_core, Complement)
   }
 
   {
+  auto layout = Layout<Shape<_2,_4>, Stride<_1,_6>>{};
+
+  test_complement(layout);
+  }
+
+  {
   auto layout = Layout<Shape<_2,_4,_8>, Stride<_8,_1,_64>>{};
 
   test_complement(layout);
@@ -167,26 +186,34 @@ TEST(CuTe_core, Complement)
   }
 
   {
-  auto layout = make_layout(Shape<Shape<_2,_2>,Shape<_2, _2>>{},
+  auto layout = make_layout(Shape <Shape <_2,_2>,Shape <_2, _2>>{},
                             Stride<Stride<_1,_4>,Stride<_8,_32>>{});
 
   test_complement(layout);
   }
 
   {
-  auto layout = make_layout(Shape<Shape<_2,_2>,Shape<_2, _2>>{},
+  auto layout = make_layout(Shape <Shape <_2, _2>,Shape <_2,_2>>{},
                             Stride<Stride<_1,_32>,Stride<_8,_4>>{});
 
   test_complement(layout);
   }
 
-  // Fails due to non-injective input
-  //{
-  //auto layout = make_layout(Shape<Shape<_2,_2>,Shape<_2, _2>>{},
-  //                          Stride<Stride<_1,_8>,Stride<_8,_4>>{});
+  // Fails due to non-injective layout
+  // {
+  // auto layout = make_layout(Shape <Shape <_2,_2>,Shape <_2,_2>>{},
+  //                           Stride<Stride<_1,_8>,Stride<_8,_4>>{});
 
-  //test_complement(layout);
-  //}
+  // test_complement(layout);
+  // }
+
+  // Fails due to non-injective layout
+  // {
+  // auto layout = Layout<Shape<_2,_2>, Stride<_2,_3>>{};
+
+  // test_complement(layout);
+  // test_complement(layout, Int<19>{});
+  // }
 
   {
   auto layout = Layout<Shape<_4,_6>, Stride<_1,_6>>{};
@@ -269,5 +296,12 @@ TEST(CuTe_core, Complement)
                             Stride<Stride<_1,_4>,Stride<_8,_32>>{});
 
   test_complement(layout);
+  }
+
+  {
+  auto layout = make_layout(Int<64>{});
+
+  test_complement(layout, make_shape(Int<32>{}, Int<4>{}, Int<4>{}));
+  test_complement(layout, make_shape(Int<32>{}, Int<4>{}, 4));
   }
 }

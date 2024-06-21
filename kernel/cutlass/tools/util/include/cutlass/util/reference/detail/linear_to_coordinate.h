@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -68,7 +68,7 @@ template <int Rank>
 struct LinearToCoordinateHelper<Rank, 0> {
 
   CUTLASS_HOST_DEVICE
-  void operator()(Coord<Rank> &coord, int64_t idx, Coord<Rank> const &extent) const {
+  void operator()(Coord<Rank> &coord, int64_t idx, Coord<Rank> const &) const {
     coord[Rank - 1] = int(idx);
   }
 };

@@ -1,6 +1,6 @@
 
 
-CMD=" srun  -N 1 --pty --gres=gpu:a100:2 -p octave -A public python "
+CMD=" srun  -N 1 --pty --gres=gpu:a100:1 -p octave -A public python "
 export http_proxy=127.0.0.1:7890 
 export https_proxy=127.0.0.1:7890
 set -x

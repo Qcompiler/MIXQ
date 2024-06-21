@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -38,7 +38,7 @@
 #include "cutlass/epilogue/dispatch_policy.hpp"
 
 #include "cute/tensor.hpp"
-#include "cute/numeric/int.hpp"
+#include "cute/numeric/numeric_types.hpp"
 #include "cute/util/type_traits.hpp"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -63,6 +63,14 @@ is_n_major() {
   return cutlass::gemm::detail::is_major<1,Stride>();
 }
 
+template <class Stride>
+constexpr bool
+is_im2col() {
+  return cute::is_same_v<Stride, cutlass::detail::TagToStrideC_t<cutlass::layout::TensorNWC>>
+      || cute::is_same_v<Stride, cutlass::detail::TagToStrideC_t<cutlass::layout::TensorNHWC>>
+      || cute::is_same_v<Stride, cutlass::detail::TagToStrideC_t<cutlass::layout::TensorNDHWC>>;
+}
+
 using cutlass::atomic_maximum;
 
 template <class T>
@@ -76,6 +84,12 @@ template <class EpilogueSchedule>
 static constexpr bool sm90_is_warp_specialized_v =
   cute::is_base_of_v<cutlass::epilogue::TmaWarpSpecialized, EpilogueSchedule>;
 
+template <class GmemLayoutTag>
+static constexpr bool is_im2col_mode =
+  cute::is_same_v<GmemLayoutTag, cutlass::layout::TensorNWC> ||
+  cute::is_same_v<GmemLayoutTag, cutlass::layout::TensorNHWC> ||
+  cute::is_same_v<GmemLayoutTag, cutlass::layout::TensorNDHWC>;
+
 template <class T>
 struct EmptyStorage {
   CUTLASS_HOST_DEVICE
@@ -87,7 +101,7 @@ CUTLASS_HOST_DEVICE
 auto get_epilogue_stride(Stride stride){
   if constexpr (cute::is_base_of_v<cutlass::gemm::EpilogueTransposed, EpilogueSchedule>) {
     return cute::make_stride(cute::get<1>(stride), cute::get<0>(stride), cute::get<2>(stride));
-  } 
+  }
   else {
     return stride;
   }
@@ -103,6 +117,28 @@ template <typename ThreadEpilogueOp>
 struct IsThreadEpilogueOpWithBias <ThreadEpilogueOp, cute::void_t<typename ThreadEpilogueOp::ElementBias>> { 
   static constexpr bool value = true; 
   using type = typename ThreadEpilogueOp::ElementBias; 
+};
+
+template <typename ThreadEpilogueOp, typename = void>
+struct IsThreadEpilogueOpWithPerChannelScaling {
+  static constexpr bool value = false;
+};
+
+template <typename ThreadEpilogueOp>
+struct IsThreadEpilogueOpWithPerChannelScaling <ThreadEpilogueOp, cute::enable_if_t<ThreadEpilogueOp::IsPerChannelScalingSupported>> {
+  static constexpr bool value = true;
+};
+
+template <typename ThreadEpilogueOp, typename = void>
+struct IsThreadEpilogueOpWithActivation {
+  static constexpr bool value = false;
+  using type = void;
+};
+
+template <typename ThreadEpilogueOp>
+struct IsThreadEpilogueOpWithActivation <ThreadEpilogueOp, cute::enable_if_t<ThreadEpilogueOp::IsEltActSupported>> {
+  static constexpr bool value = true;
+  using type = typename ThreadEpilogueOp::ActivationFn;
 };
 
 // Wrapper class to use operator-style epilogues in sm90 TMA warp-specialized kernels
@@ -170,7 +206,8 @@ public:
       [[maybe_unused]] TileCoordMNKL tile_coord_mnkl,
       [[maybe_unused]] TiledMma tiled_mma,
       [[maybe_unused]] int thread_idx,
-      [[maybe_unused]] TensorStorage& shared_tensors)
+      [[maybe_unused]] TensorStorage& shared_tensors,
+      [[maybe_unused]] int subtile_idx=-1)
   {
     return load_pipe_producer_state;
   }
@@ -202,14 +239,15 @@ public:
       cute::Tensor<AccEngine,AccLayout> accumulators,
       TiledMma tiled_mma,
       int thread_idx,
-      TensorStorage& shared_tensors)
+      TensorStorage& shared_tensors,
+      int subtile_index = -1)
   {
-    constexpr int BLK_M_RANK = rank<0>(tile_shape_MNK);
+    constexpr int BLK_M_RANK = cute::rank<0>(tile_shape_MNK);
     auto m_max_coord = unwrap(cute::transform(make_seq<BLK_M_RANK>{}, [&](auto i) {
         return get<0,i>(problem_shape_mnkl) - get<0,i>(tile_shape_MNK) * get<0,i>(tile_coord_mnkl);
       }));
 
-    constexpr int BLK_N_RANK = rank<1>(tile_shape_MNK);
+    constexpr int BLK_N_RANK = cute::rank<1>(tile_shape_MNK);
     auto n_max_coord = unwrap(cute::transform(make_seq<BLK_N_RANK>{}, [&](auto i) {
         return get<1,i>(problem_shape_mnkl) - get<1,i>(tile_shape_MNK) * get<1,i>(tile_coord_mnkl);
       }));

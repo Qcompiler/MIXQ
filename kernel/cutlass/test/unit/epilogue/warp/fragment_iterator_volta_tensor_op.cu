@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -93,8 +93,8 @@ TEST(SM70_Epilogue_warp_FragmentIterator, mma_f16_64x64x4) {
     typename MmaTensorOp::IteratorC::Fragment accumulator_tile;
 
     CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < accumulator_tile.size(); ++i) {
-      accumulator_tile[i] = ElementC(i);
+    for (size_t i = 0; i < accumulator_tile.size(); ++i) {
+      accumulator_tile[i] = static_cast<ElementC>(int(i));
     }
 
     using FragmentIterator = cutlass::epilogue::warp::FragmentIteratorVoltaTensorOp<
@@ -114,7 +114,7 @@ TEST(SM70_Epilogue_warp_FragmentIterator, mma_f16_64x64x4) {
 
     #if 0
       std::cout << "T" << tid << ": ";
-      for (int i = 0; i < frag.size(); ++i) {
+      for (size_t i = 0; i < frag.size(); ++i) {
         std::cout << "  " << frag[i];
       }
       std::cout << std::endl;
@@ -169,8 +169,8 @@ TEST(SM70_Epilogue_warp_FragmentIterator, mma_f32_64x64x4) {
     typename MmaTensorOp::IteratorC::Fragment accumulator_tile;
 
     CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < accumulator_tile.size(); ++i) {
-      accumulator_tile[i] = ElementC(i);
+    for (size_t i = 0; i < accumulator_tile.size(); ++i) {
+      accumulator_tile[i] = static_cast<ElementC>(i);
     }
 
     typename MmaTensorOp::IteratorC iterator_C(accumulator_tensor.host_ref(), tid);  

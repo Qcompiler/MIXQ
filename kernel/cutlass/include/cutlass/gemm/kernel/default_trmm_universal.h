@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -190,7 +190,7 @@ struct DefaultTrmmUniversal<
   Stages,
   SplitKSerial,
   Operator,
-  typename std::enable_if< ! cutlass::is_complex<ElementAccumulator>::value>::type
+  typename platform::enable_if< ! cutlass::is_complex<ElementAccumulator>::value>::type
 > {
 
   using DefaultTrmmKernel = typename kernel::DefaultTrmm<
@@ -311,7 +311,7 @@ struct DefaultTrmmUniversal<
   Stages,
   SplitKSerial,
   Operator,
-  typename std::enable_if<cutlass::is_complex<ElementAccumulator>::value>::type
+  typename platform::enable_if<cutlass::is_complex<ElementAccumulator>::value>::type
 > {
 
   using DefaultTrmmKernel = typename kernel::DefaultTrmmComplex<

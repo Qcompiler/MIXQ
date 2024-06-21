@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -85,7 +85,7 @@ struct is_integral<integral_constant<T,v>> : true_type {};
 // is_static detects if an (abstract) value is defined completely by it's type (no members)
 
 template <class T>
-struct is_static : bool_constant<is_empty<T>::value> {};
+struct is_static : bool_constant<is_empty<remove_cvref_t<T>>::value> {};
 
 template <class T>
 constexpr bool is_static_v = is_static<T>::value;
@@ -148,7 +148,9 @@ using _96     = Int<96>;
 using _128    = Int<128>;
 using _192    = Int<192>;
 using _256    = Int<256>;
+using _384    = Int<384>;
 using _512    = Int<512>;
+using _768    = Int<768>;
 using _1024   = Int<1024>;
 using _2048   = Int<2048>;
 using _4096   = Int<4096>;
@@ -411,6 +413,19 @@ conditional_return(TrueType const& t, FalseType const& f) {
   }
 }
 
+template <class Trait>
+CUTE_HOST_DEVICE constexpr
+auto
+static_value()
+{
+  if constexpr (is_std_integral<decltype(Trait::value)>::value) {
+    return Int<Trait::value>{};
+  } else {
+    return Trait::value;
+  } 
+  CUTE_GCC_UNREACHABLE;
+}
+
 //
 // Display utilities
 //
@@ -427,5 +442,36 @@ CUTE_HOST std::ostream& operator<<(std::ostream& os, C<t> const&) {
   return os << "_" << t;
 }
 #endif
+
+
+namespace detail {
+
+// parse_int_digits takes a variadic number of digits and converts them into an int
+template <class... Ts>
+constexpr uint64_t parse_int_digits(uint64_t result, int digit, Ts... digits)
+{
+  if constexpr (sizeof...(Ts) == 0) {
+    return 10 * result + digit;
+  } else {
+    return parse_int_digits(10 * result + digit, digits...);
+  }
+}
+
+} // end namespace detail
+
+
+// This user-defined literal operator allows cute::constant written as literals. For example,
+//
+//    auto var = 32_c;
+//
+//  var has type cute::constant<int,32>.
+//
+template <char... digits>
+constexpr cute::constant<int,detail::parse_int_digits(0, (digits - '0')...)> operator "" _c()
+{
+  static_assert((('0' <= digits && digits <= '9') && ...),
+                "Expected 0 <= digit <= 9 for each digit of the integer.");
+  return {};
+}
 
 } // end namespace cute

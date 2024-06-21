@@ -1,6 +1,6 @@
-![ALT](/media/images/gemm-hierarchy-with-epilogue-no-labels.png "CUTLASS Implicit GEMM API")
+![ALT](../images/gemm-hierarchy-with-epilogue-no-labels.png "CUTLASS Implicit GEMM API")
 
-[README](/README.md#documentation) > **Implicit GEMM Convolution**
+[README](../../README.md#documentation) > **Implicit GEMM Convolution**
 
 # CUTLASS Convolution
 
@@ -761,7 +761,7 @@ Convolution can also be run by the CUTLASS Profiler.
 
 # Copyright
 
-Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: BSD-3-Clause
 
 ```

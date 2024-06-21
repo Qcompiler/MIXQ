@@ -1,4 +1,4 @@
-# Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -54,6 +54,11 @@ cutlass_test_unit_add_executable(
 cutlass_test_unit_add_executable(
   cutlass_test_unit_cute_hopper_tma_load
   tma_load.cu
+)
+
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_cute_hopper_tma_mcast_load
+  tma_mcast_load.cu
 )
 
 cutlass_test_unit_add_executable(

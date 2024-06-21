@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -109,8 +109,8 @@ struct TestbedUniversal {
         scope_max = 2;
         scope_min = 0;
       } else if (bits_input <= 8) {
-        scope_max = is_unsigned_int ? 4 : 2;
-        scope_min = is_unsigned_int ? 0 : -2;
+        scope_max = is_unsigned_int ? 2 : 1;
+        scope_min = is_unsigned_int ? 0 : -1;
       } else if (bits_output == 16) {
         scope_max = is_unsigned_int ? 10 : 5;
         scope_min = is_unsigned_int ? 0 : -5;
@@ -277,7 +277,7 @@ struct TestbedUniversal {
     // Determine SMEM requirements and waive if not satisfied
     //
 
-    int smem_size = int(sizeof(typename Gemm::GemmKernel::SharedStorage));
+    size_t smem_size = sizeof(typename Gemm::GemmKernel::SharedStorage);
 
     cudaDeviceProp properties;
     int device_idx;

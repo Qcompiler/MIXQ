@@ -1,6 +1,6 @@
 ################################################################################
 #
-# Copyright (c) 20123 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 20123 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -40,9 +40,9 @@ import unittest
 import cutlass
 from cutlass import Tensor
 import cutlass.backend.evt
-from cutlass.profiler import CUDAEventProfiler
 from cutlass.shape import GemmCoord
 from cutlass.utils.datatypes import torch_type
+from cutlass.utils.profiler import CUDAEventProfiler
 
 
 class EVTReferenceModule:

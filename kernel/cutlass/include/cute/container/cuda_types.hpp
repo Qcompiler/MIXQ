@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -96,11 +96,11 @@ uint32_t&& get(dim3&& a)
 {
   static_assert(I < 3, "Index out of range");
   if constexpr (I == 0) {
-    return std::move(a.x);
+    return cute::move(a.x);
   } else if constexpr (I == 1) {
-    return std::move(a.y);
+    return cute::move(a.y);
   } else if constexpr (I == 2) {
-    return std::move(a.z);
+    return cute::move(a.z);
   }
 
   CUTE_GCC_UNREACHABLE;
@@ -162,11 +162,11 @@ uint32_t&& get(uint3&& a)
 {
   static_assert(I < 3, "Index out of range");
   if constexpr (I == 0) {
-    return std::move(a.x);
+    return cute::move(a.x);
   } else if constexpr (I == 1) {
-    return std::move(a.y);
+    return cute::move(a.y);
   } else if constexpr (I == 2) {
-    return std::move(a.z);
+    return cute::move(a.z);
   }
 
   CUTE_GCC_UNREACHABLE;

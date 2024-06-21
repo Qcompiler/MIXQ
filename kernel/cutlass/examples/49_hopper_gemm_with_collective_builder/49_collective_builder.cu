@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -86,7 +86,7 @@
     CUTLASS builders make an attempt to pick the best schedule when `Auto` is provided such that the
     assembled collectives have the best performance, but this is not a guarantee. A user relying on `Auto`
     may get a free performance upgrade with newer CUTLASS releases in case we can provide more optimized
-    implementations that the builder can transparently assemble for `Auto`. But a user should not rely on 
+    implementations that the builder can transparently assemble for `Auto`. But a user should not rely on
     `Auto` if they require a specific scheduling policy and/or stage count to be used.
 
     If a user decides to let the builders pick the collective specialization via `Auto` schedules,
@@ -289,9 +289,9 @@ struct ExampleRunner {
   // EVTs can be constructed by composing the fundamental load/store/compute visitor operations defined in include/cutlass/epilogue/fusion
   // For more complex examples of EVT construction please refer to include/cutlass/epilogue/fusion/sm90_callbacks_tma_warpspecialized.hpp
   using CustomEVT =  // alpha * acc + beta * C
-    cutlass::epilogue::fusion::Sm90EVT<cutlass::epilogue::fusion::Sm90Compute<cutlass::multiply_add, ElementD, ElementCompute, RoundStyle>, // beta * C + (alpha * acc)
+    cutlass::epilogue::fusion::Sm90EVT<cutlass::epilogue::fusion::Sm90Compute<cutlass::homogeneous_multiply_add, ElementD, ElementCompute, RoundStyle>, // beta * C + (alpha * acc)
       cutlass::epilogue::fusion::Sm90ScalarBroadcast<ElementScalar>, // beta
-      cutlass::epilogue::fusion::Sm90SrcFetch, // C
+      cutlass::epilogue::fusion::Sm90SrcFetch<ElementC>, // C
       cutlass::epilogue::fusion::Sm90EVT<cutlass::epilogue::fusion::Sm90Compute<cutlass::multiplies, ElementCompute, ElementCompute, RoundStyle>, // alpha * acc
         cutlass::epilogue::fusion::Sm90ScalarBroadcast<ElementScalar>, // alpha
         cutlass::epilogue::fusion::Sm90AccFetch // acc
@@ -302,7 +302,7 @@ struct ExampleRunner {
   // Users can select one of these operations by passing one of the tags defined in include/cutlass/epilogue/fusion/operations.hpp
   // to the CollectiveBuilder. This frees the user from having to compute additional parameters such as stage counts and copy atoms/layouts.
   // These tags also provide additional metadata that can be queried at compile time.
-  using DefaultOperation = cutlass::epilogue::fusion::LinearCombination<ElementD, ElementCompute, ElementScalar, RoundStyle>;
+  using DefaultOperation = cutlass::epilogue::fusion::LinearCombination<ElementD, ElementCompute, ElementC, ElementScalar, RoundStyle>;
 
   using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
       cutlass::arch::Sm90, cutlass::arch::OpClassTensorOp,
@@ -322,7 +322,7 @@ struct ExampleRunner {
       ElementAccumulator,
       Shape<_128,_128,_64>, Shape<_2,_1,_1>,
       cute::conditional_t<cute::is_same_v<StageCountType, cutlass::gemm::collective::StageCountAuto>,
-          cutlass::gemm::collective::StageCountAutoCarveout<(int)sizeof(typename CollectiveEpilogue::SharedStorage)>,
+          cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(sizeof(typename CollectiveEpilogue::SharedStorage))>,
           StageCountType>,
       MainloopScheduleType
     >::CollectiveOp;

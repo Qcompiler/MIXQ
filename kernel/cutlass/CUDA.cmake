@@ -1,4 +1,4 @@
-# Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -248,11 +248,15 @@ function(cutlass_unify_source_files TARGET_ARGS_VAR)
     message(FATAL_ERROR "TARGET_ARGS_VAR parameter is required")
   endif()
 
+  if (NOT DEFINED __BATCH_SOURCES)
+    set(__BATCH_SOURCES ON)
+  endif()
+
   if (__BATCH_SOURCES AND NOT DEFINED __BATCH_SIZE)
     set(__BATCH_SIZE ${CUTLASS_UNITY_BUILD_BATCH_SIZE})
   endif()
 
-  if (CUTLASS_UNITY_BUILD_ENABLED AND DEFINED __BATCH_SIZE AND __BATCH_SIZE GREATER 1)
+  if (CUTLASS_UNITY_BUILD_ENABLED AND __BATCH_SOURCES AND __BATCH_SIZE GREATER 1)
 
     set(CUDA_FILE_ARGS)
     set(TARGET_SOURCE_ARGS)
@@ -322,6 +326,14 @@ function(cutlass_add_library NAME)
    cxx_std_11
    )
 
+  get_target_property(TARGET_TYPE ${NAME} TYPE)
+
+  if (TARGET_TYPE MATCHES "SHARED")
+    set_target_properties(${NAME} PROPERTIES CUDA_RUNTIME_LIBRARY Shared)
+  elseif(TARGET_TYPE MATCHES "STATIC")
+    set_target_properties(${NAME} PROPERTIES CUDA_RUNTIME_LIBRARY Static)
+  endif()
+
   if(__EXPORT_NAME)
     add_library(nvidia::cutlass::${__EXPORT_NAME} ALIAS ${NAME})
     set_target_properties(${NAME} PROPERTIES EXPORT_NAME ${__EXPORT_NAME})
@@ -332,9 +344,18 @@ endfunction()
 function(cutlass_add_executable NAME)
 
   set(options)
-  set(oneValueArgs)
+  set(oneValueArgs CUDA_RUNTIME_LIBRARY)
   set(multiValueArgs)
   cmake_parse_arguments(_ "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+  if (NOT DEFINED __CUDA_RUNTIME_LIBRARY)
+    set(__CUDA_RUNTIME_LIBRARY Shared)
+  endif()
+
+  set(__CUDA_RUNTIME_LIBRARY_ALLOWED None Shared Static)
+  if (NOT __CUDA_RUNTIME_LIBRARY IN_LIST __CUDA_RUNTIME_LIBRARY_ALLOWED)
+    message(FATAL_ERROR "CUDA_RUNTIME_LIBRARY value '${__CUDA_RUNTIME_LIBRARY}' is not in allowed list of '${__CUDA_RUNTIME_LIBRARY_ALLOWED}'")
+  endif()
 
   cutlass_unify_source_files(TARGET_SOURCE_ARGS ${__UNPARSED_ARGUMENTS})
 
@@ -354,6 +375,8 @@ function(cutlass_add_executable NAME)
    INTERFACE
    cxx_std_11
    )
+
+  set_target_properties(${NAME} PROPERTIES CUDA_RUNTIME_LIBRARY ${__CUDA_RUNTIME_LIBRARY})
 
 endfunction()
 

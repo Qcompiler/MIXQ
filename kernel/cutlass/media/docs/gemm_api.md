@@ -1,6 +1,6 @@
-![ALT](/media/images/gemm-hierarchy-with-epilogue-no-labels.png "CUTLASS GEMM API")
+![ALT](../images/gemm-hierarchy-with-epilogue-no-labels.png "CUTLASS GEMM API")
 
-[README](/README.md#documentation) > **CUTLASS GEMM API**
+[README](../../README.md#documentation) > **CUTLASS GEMM API**
 
 # CUTLASS GEMM API
 
@@ -542,7 +542,7 @@ to inline PTX.
 
 # Copyright
 
-Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: BSD-3-Clause
 
 ```

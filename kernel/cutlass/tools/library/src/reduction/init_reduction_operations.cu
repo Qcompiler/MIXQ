@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -42,6 +42,7 @@ namespace library {
 ///////////////////////////////////////////////////////////////////////////////////////////////
 //                             CUTLASS Reduction Instances                                   //
 ///////////////////////////////////////////////////////////////////////////////////////////////
+
 void initialize_reduce_add_linear_combination_f16_f16_f16(Manifest &manifest);
 void initialize_reduce_add_linear_combination_f32_f32_f16(Manifest &manifest);
 void initialize_reduce_add_linear_combination_f32_f32_bf16(Manifest &manifest);

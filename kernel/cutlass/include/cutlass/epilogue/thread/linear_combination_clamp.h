@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -432,17 +432,12 @@ public:
       intermediate = mul_add_accumulator(alpha_, converted_accumulator, intermediate);    // D = alpha * Accum + X
     }
 
-    // Convert floats back to INT
-    FragmentAccumulator scaled_accumulator;
+    //
+    // Convert float => ElementOutput_ with clamping
+    //
+    NumericArrayConverter<ElementOutput, ElementCompute, kCount, Round> destination_converter;
 
-    NumericArrayConverter<int, ElementCompute, kCount, Round> compute_converter;
-
-    scaled_accumulator = compute_converter(intermediate);
-
-    // Convert to destination numeric type
-    NumericArrayConverter<ElementOutput, int, kCount, Round> destination_converter;
-
-    return destination_converter(scaled_accumulator);
+    return destination_converter(intermediate);
   }
 
   /// Computes linear scaling: D = alpha * accumulator
@@ -466,17 +461,12 @@ public:
       intermediate = mul_add_accumulator(alpha_, converted_accumulator);    // D = alpha * Accum
     }
 
-    // Convert floats back to INT
-    FragmentAccumulator scaled_accumulator;
+    //
+    // Convert float => ElementOutput_ with clamping
+    //
+    NumericArrayConverter<ElementOutput, ElementCompute, kCount, Round> destination_converter;
 
-    NumericArrayConverter<int, ElementCompute, kCount, Round> compute_converter;
-
-    scaled_accumulator = compute_converter(intermediate);
-
-    // Convert to destination numeric type
-    NumericArrayConverter<ElementOutput, int, kCount, Round> destination_converter;
-
-    return destination_converter(scaled_accumulator);
+    return destination_converter(intermediate);
   }
 };
 

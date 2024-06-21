@@ -186,17 +186,17 @@ if __name__ == "__main__":
         llm_int8_has_fp16_weight=False,
         )
         model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        device_map='auto',
-        max_memory=max_memory,
-        quantization_config=quantization_config
+            model_path,
+            device_map='auto',
+            max_memory=max_memory,
+            quantization_config=quantization_config
         )
 
  
     if args.model_type == 'awq':
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
         print(f" -- Loading model  awq...")
-        sys.path.append("/home/chenyidong/quant/AutoAWQ")
+         
 
         from awq import AutoAWQForCausalLM        
         model = AutoAWQForCausalLM.from_quantized(model_path, quant_file, fuse_layers=True, mix = False)
@@ -222,57 +222,15 @@ if __name__ == "__main__":
         
         #model = model.to('cuda')
 
-    if args.model_type == 'QUIK':
-        import modelutils    
-        model = modelutils.get_llama(args.model_path, args.n_ctx, "")
-        print("Load quantized model from ", args.quant_file)
-        save_dict = torch.load(args.quant_file)
-        model.load_state_dict(save_dict["model"])   
-        model.config.use_cache = True
-        model = model.to('cuda')
-        cache = {'past': None}
-        def clear_past(i):
-            def tmp(layer, inp, out):
-                if cache['past']:
-                    cache['past'][i] = None
-            return tmp
-        for i, layer in enumerate(model.model.layers):
-            layer.register_forward_hook(clear_past(i))        
-
-        
-        relative_path = "/home/chenyidong/quant/QUIK/experiments/act_scales/{}.pt".format(args.model_path.split('/')[-1])
-
-        print(relative_path)
-        act_scales = torch.load(relative_path)
-
-
-
-        quant_sim.add_actquant(model)
-        layers = modelutils.find_layers(model)
-
-        for name in layers:
-            
-            bits = args.a_bits
-            if 'lm_head' in name or "rotary_emb" in name:
-                print(f'Skipping {name}\n')
-                continue 
-            
-            
-            if 'down_proj' in name:
-                if args.int8_down_proj:
-                    bits = 8       
-            
-            if args.fp_features_num > 0 or args.fp_features_frac is not None:
-                fp_features_num = get_fp_features_num(layers[name].module, args)
-                if "qkv" in name:
-                    act_name = name.replace("qkv", "q")
-                else:
-                    act_name = name
-                layers[name].fp_features_configure(act_scales[act_name], fp_features_num)
-            layers[name].quantizer.configure(bits=bits)
-
-        llama_replace_with_kernels(model, args)    
-        model = model.to('cuda')
+    if args.model_type == 'quik':
+        from mixquant import AutoForCausalLM
+        model = AutoForCausalLM.from_quantized(
+            model_path, quant_file, fuse_layers=True,
+            max_new_tokens=args.n_generate, batch_size=args.batch_size,
+            safetensors=args.safetensors,
+            mix = True,
+            cache = cache
+        )
     print(model)
     ppl = Perplexity(model, tokenizer, args.dataset_path, args.dataset_name, 
                      args.split, args.text_column, args.eval_accuracy)

@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -46,8 +46,11 @@ from utils import LayoutCombination, add_test_gemm
 
 cutlass.set_log_level(logging.WARNING)
 cc = 90
+dtype = cutlass.DataType.s8
+
 
 @unittest.skipIf(device_cc() < cc, 'Device compute capability is insufficient for SM90 tests.')
+@unittest.skipIf(cutlass.utils.datatypes.torch_type(dtype) is None, f'Version of torch installed does not contain a datatype match for {dtype}')
 class GemmS8Sm90(unittest.TestCase):
     """
     Wrapper class to which tests will be added dynamically in __main__
@@ -55,7 +58,7 @@ class GemmS8Sm90(unittest.TestCase):
     pass
 
 
-add_test_specialized = partial(add_test_gemm, cls=GemmS8Sm90, element=cutlass.DataType.s8, compilation_modes=['nvcc'])
+add_test_specialized = partial(add_test_gemm, cls=GemmS8Sm90, element=dtype, compilation_modes=['nvcc'])
 
 add_test_tensorop = partial(add_test_specialized, opclass=cutlass.OpcodeClass.TensorOp)
 

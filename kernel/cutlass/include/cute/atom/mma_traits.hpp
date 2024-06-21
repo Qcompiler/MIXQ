@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -50,14 +50,14 @@ struct supports_output_scaling<X, void_t<decltype(declval<X>().accumulate_)>> { 
 /**
  * concept MMA_Traits
  * {
- *   using ElementDVal =  // Logical A-value type
- *   using ElementAVal =  // Logical B-value type
- *   using ElementBVal =  // Logical C-value type
- *   using ElementCVal =  // Logical D-value type    (NOTE: Not used? Assumed == ElementDVal)
+ *   using ValTypeD =  // Logical A-value type
+ *   using ValTypeA =  // Logical B-value type
+ *   using ValTypeB =  // Logical C-value type
+ *   using ValTypeC =  // Logical D-value type    (NOTE: Not used? Assumed == ValTypeD)
  *
- *   using ElementAFrg =  // A-type consumed by MMA  (if ommitted, same as ElementAVal)
- *   using ElementBFrg =  // B_type consumed by MMA  (if ommitted, same as ElementBVal)
- *   using ElementCFrg =  // C_type consumed by MMA  (if ommitted, same as ElementCVal)
+ *   using FrgTypeA =  // A-type consumed by MMA  (if ommitted, same as ValTypeA)
+ *   using FrgTypeB =  // B_type consumed by MMA  (if ommitted, same as ValTypeB)
+ *   using FrgTypeC =  // C_type consumed by MMA  (if ommitted, same as ValTypeC)
  *
  *   using Shape_MNK =    // Logical MxNxK shape of the MMA
  *
@@ -78,10 +78,10 @@ struct MMA_Traits
 template <class D, class A, class B, class C>
 struct MMA_Traits<UniversalFMA<D,A,B,C>>
 {
-  using ElementDVal = D;
-  using ElementAVal = A;
-  using ElementBVal = B;
-  using ElementCVal = C;
+  using ValTypeD = D;
+  using ValTypeA = A;
+  using ValTypeB = B;
+  using ValTypeC = C;
 
   // Logical shape of the MMA
   using Shape_MNK = Shape<_1,_1,_1>;
@@ -149,17 +149,17 @@ mma_unpack(MMA_Traits<MMA_Op, MMA_Args...> const& traits,
     //CUTE_STATIC_ASSERT_V(size(rC) == Int<RegNumC>{});
 
     if constexpr (detail::supports_output_scaling<MMATraits>::value) {
-      detail::explode_with_d_scaling(MMA_Op::fma,
-            rA, make_int_sequence<RegNumA>{},
-            rB, make_int_sequence<RegNumB>{},
-            rC, make_int_sequence<RegNumC>{},
-            traits.accumulate_);
+      detail::explode(MMA_Op::fma,
+                      rA, make_int_sequence<RegNumA>{},
+                      rB, make_int_sequence<RegNumB>{},
+                      rC, make_int_sequence<RegNumC>{},
+                      &(traits.accumulate_), seq<0>{});
     }
     else {
       detail::explode(MMA_Op::fma,
-                  rA, make_int_sequence<RegNumA>{},
-                  rB, make_int_sequence<RegNumB>{},
-                  rC, make_int_sequence<RegNumC>{});
+                      rA, make_int_sequence<RegNumA>{},
+                      rB, make_int_sequence<RegNumB>{},
+                      rC, make_int_sequence<RegNumC>{});
     }
   }
   else {
@@ -169,19 +169,19 @@ mma_unpack(MMA_Traits<MMA_Op, MMA_Args...> const& traits,
       CUTE_STATIC_ASSERT_V(size(rD) == Int<RegNumD>{});
       CUTE_STATIC_ASSERT_V(size(rC) == Int<RegNumC>{});
       if constexpr (detail::supports_output_scaling<MMATraits>::value) {
-        detail::explode_with_d_scaling(MMA_Op::fma,
+        detail::explode(MMA_Op::fma,
                         rD, make_int_sequence<RegNumD>{},
                         rA, make_int_sequence<RegNumA>{},
                         rB, make_int_sequence<RegNumB>{},
                         rC, make_int_sequence<RegNumC>{},
-                        traits.accumulate_);
+                        &(traits.accumulate_), seq<0>{});
       }
       else {
         detail::explode(MMA_Op::fma,
-                  rD, make_int_sequence<RegNumD>{},
-                  rA, make_int_sequence<RegNumA>{},
-                  rB, make_int_sequence<RegNumB>{},
-                  rC, make_int_sequence<RegNumC>{});
+                        rD, make_int_sequence<RegNumD>{},
+                        rA, make_int_sequence<RegNumA>{},
+                        rB, make_int_sequence<RegNumB>{},
+                        rC, make_int_sequence<RegNumC>{});
       }
   }
 }
@@ -198,7 +198,7 @@ template <class MMA_Op, class... MMA_Args,
 CUTE_HOST_DEVICE constexpr
 void
 mma_unpack(MMA_Traits<MMA_Op, MMA_Args...> const& traits,
-           Tensor<TD, DLayout>      && D,
+           Tensor<TD, DLayout>     &&  D,
            Tensor<TA, ALayout> const&  A,
            Tensor<TB, BLayout> const&  B,
            Tensor<TC, CLayout> const&  C)
@@ -209,19 +209,19 @@ mma_unpack(MMA_Traits<MMA_Op, MMA_Args...> const& traits,
 namespace detail {
 
 template <class X, class = void>
-struct FrgTypeA_or_Default { using type = typename X::ElementAVal; };
+struct FrgTypeA_or_Default { using type = typename X::ValTypeA; };
 template <class X>
-struct FrgTypeA_or_Default<X,void_t<typename X::ElementAFrg>> { using type = typename X::ElementAFrg; };
+struct FrgTypeA_or_Default<X,void_t<typename X::FrgTypeA>> { using type = typename X::FrgTypeA; };
 
 template <class X, class = void>
-struct FrgTypeB_or_Default { using type = typename X::ElementBVal; };
+struct FrgTypeB_or_Default { using type = typename X::ValTypeB; };
 template <class X>
-struct FrgTypeB_or_Default<X,void_t<typename X::ElementBFrg>> { using type = typename X::ElementBFrg; };
+struct FrgTypeB_or_Default<X,void_t<typename X::FrgTypeB>> { using type = typename X::FrgTypeB; };
 
 template <class X, class = void>
-struct FrgTypeC_or_Default { using type = typename X::ElementCVal; };
+struct FrgTypeC_or_Default { using type = typename X::ValTypeC; };
 template <class X>
-struct FrgTypeC_or_Default<X,void_t<typename X::ElementCFrg>> { using type = typename X::ElementCFrg; };
+struct FrgTypeC_or_Default<X,void_t<typename X::FrgTypeC>> { using type = typename X::FrgTypeC; };
 
 } // end namespace detail
 

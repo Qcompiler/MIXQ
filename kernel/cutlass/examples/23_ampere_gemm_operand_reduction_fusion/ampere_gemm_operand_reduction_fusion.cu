@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -279,7 +279,7 @@ struct Options {
   /// Prints the usage statement.
   std::ostream & print_usage(std::ostream &out) const {
 
-    out << "28_ampere_gemm_bias_fusion example\n\n"
+    out << "23_ampere_operand_gemm_reduction_fusion\n\n"
       << "Options:\n\n"
       << "  --help               If specified, displays this usage statement.\n\n"
       << "  --m=<int>            GEMM M\n"
@@ -297,7 +297,7 @@ struct Options {
       << "  --tag=<string>       String to replicate across the first column in the results table\n";
 
     out << "\n\nExamples:\n\n"
-      << "$ ./examples/23_ampere_gemm_bias_fusion_example/ampere_gemm_bias_fusion  --m=1024 --n=1024 --k=1024 \n\n";
+      << "$ ./examples/23_ampere_gemm_operand_reduction_fusion/23_ampere_gemm_operand_reduction_fusion  --m=1024 --n=1024 --k=1024 \n\n";
 
     return out;
   }
@@ -377,22 +377,22 @@ Result profile(Options const &options) {
   cutlass::reference::host::TensorFillRandomUniform(
       tensor_a.host_view(),
       1997,
-      ElementInputA(2),
-      ElementInputA(-2),
+      ElementInputA(1),
+      ElementInputA(-1),
       0);  // <- Fill tensor A on host with uniform-distribution random data
 
   cutlass::reference::host::TensorFillRandomUniform(
       tensor_b.host_view(),
       2003,
-      ElementInputB(2),
-      ElementInputB(-2),
+      ElementInputB(1),
+      ElementInputB(-1),
       0);  // <- Fill tensor B on host with uniform-distribution random data
 
   cutlass::reference::host::TensorFillRandomUniform(
       tensor_c.host_view(),
       2017,
-      ElementOutput(2),
-      ElementOutput(-2),
+      ElementOutput(1),
+      ElementOutput(-1),
       0);  // <- Fill matrix C on host with uniform-distribution random data
   cutlass::reference::host::TensorFill(
       tensor_d.host_view());  // <- fill matrix D on host with zeros

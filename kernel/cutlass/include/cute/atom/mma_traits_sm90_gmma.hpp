@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -117,16 +117,22 @@ using Layout_SW128_Atom = typename conditional<tnsp == GMMA::Major::MN,
                                                Layout_K_SW128_Atom<Type>>::type;
 
 //
-// Tensor to LayoutType utility
+// Tensor (position-dependent swizzle) to LayoutType utility
 //
 
-// smem_ptr_swizzle LayoutType
-template <int B, int M, int S, class Shape, class Stride>
+template <class Engine, class Shape, class Stride>
 CUTE_HOST_DEVICE constexpr
 LayoutType
-layout_type(Tensor<ViewEngine<smem_ptr_swizzle<const uint128_t, Swizzle<B,M,S>>>,
-                   Layout<Shape,Stride>> const&)
+layout_type(Tensor<Engine, Layout<Shape,Stride>> const&)
 {
+  static_assert(is_same<uint128_t, typename Engine::value_type>::value,
+                "Expected uint128_t type in LayoutType conversion.");
+
+  using Swizzle = get_swizzle_t<Engine>;
+  constexpr int B = Swizzle::num_bits;
+  constexpr int M = Swizzle::num_base;
+  constexpr int S = Swizzle::num_shft;
+
   static_assert(M == 4,           "Unsupported layout swizzle");
   static_assert(0 <= B && B <= 3, "Unsupported layout swizzle");
   static_assert(S == 3,           "Unsupported layout swizzle");
@@ -138,16 +144,6 @@ layout_type(Tensor<ViewEngine<smem_ptr_swizzle<const uint128_t, Swizzle<B,M,S>>>
     case 3: return LayoutType::B128;
   }
   return LayoutType::INTERLEAVE;  // ERROR
-}
-
-// smem_ptr non-swizzled LayoutType
-template <class Shape, class Stride>
-CUTE_HOST_DEVICE constexpr
-LayoutType
-layout_type(Tensor<ViewEngine<smem_ptr<const uint128_t>>,
-                   Layout<Shape,Stride>> const&)
-{
-  return LayoutType::INTERLEAVE;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -211,8 +207,8 @@ make_gmma_desc(Tensor<TEngine,TLayout> const& tensor)
   desc.bitfield.layout_type_ = uint8_t(LAYOUT_TYPE);
 
   // Start address (4LSB not included)
-  uint32_t start_address = cast_smem_ptr_to_uint(u128_tensor.data().get());
-  desc.bitfield.start_address_ = start_address >> 4;
+  uint32_t start_address = cast_smem_ptr_to_uint(raw_pointer_cast(u128_tensor.data()));
+  desc.bitfield.start_address_ = static_cast<uint16_t>(start_address >> 4);
 
   constexpr uint8_t base_offset = 0;
   desc.bitfield.base_offset_ = base_offset;
@@ -314,43 +310,53 @@ make_gmma_desc(Tensor<TEngine,TLayout> const& tensor)
 
 struct DescriptorIterator
 {
+  using reference    = GmmaDescriptor;
+  using element_type = GmmaDescriptor;
+  using value_type   = GmmaDescriptor;
+
   GmmaDescriptor desc_;
 
   // Dereference returns the GmmaDescriptor
   CUTE_HOST_DEVICE constexpr
-  GmmaDescriptor const& operator*() const { return desc_; }
+  reference operator*() const { return desc_; }
 
   // Advance and return a new GmmaDescriptor
   template <class Index>
   CUTE_HOST_DEVICE constexpr
-  GmmaDescriptor operator[](Index const& i) const { return *(*this + i); }
+  reference operator[](Index const& i) const { return *(*this + i); }
 
   // Return an advanced iterator
   template <class Index>
   CUTE_HOST_DEVICE constexpr
   DescriptorIterator operator+(Index const& offset) const
   {
-    return { GmmaDescriptor {desc_ + uint64_t(offset)} };
+    return { GmmaDescriptor{desc_ + uint64_t(offset)} };
   }
 
   CUTE_HOST_DEVICE friend void
-  print(DescriptorIterator const&) { printf("GMMA::DescriptorIterator"); }
+  print(DescriptorIterator) { printf("GMMA::DescriptorIterator"); }
 };
+
+template <class T>
+CUTE_HOST_DEVICE constexpr
+GmmaDescriptor
+raw_pointer_cast(DescriptorIterator const& ptr) {
+  return ptr.desc_;
+}
+
+// Recast a DescriptorIterator Tensor to uint64_t, it's RegType in mma_unpack
+template <class NewT>
+CUTE_HOST_DEVICE constexpr
+DescriptorIterator
+recast_ptr(DescriptorIterator const& iter) {
+  static_assert(is_same<NewT, uint64_t>::value, "Can only cast GmmaDescriptorIterator to uint64_t.");
+  return iter;  // Do nothing, it will still dereference to GmmaDescriptor and decay to uint64_t
+}
 
 // The GMMA Traits below have custom fragment type flags for their smem desc tensors.
 // These flags specialize a MakeTensor customization point to correctly make the fragment that is desired.
 template <GMMA::Major>
 struct smem_desc : DescriptorIterator {};
-
-// Recast a DescriptorIterator Tensor to uint64_t, it's RegType
-template <class TLayout, class NewT>
-CUTE_HOST_DEVICE constexpr
-auto
-recast(Tensor<ViewEngine<DescriptorIterator>,TLayout> const& tensor, type_list<NewT>)
-{
-  static_assert(is_same<NewT, uint64_t>::value, "Can only cast descriptors to uint64_t.");
-  return make_tensor(tensor.data(), Layout<_1,_0>{});
-}
 
 } // end namespace GMMA
 
@@ -358,13 +364,13 @@ recast(Tensor<ViewEngine<DescriptorIterator>,TLayout> const& tensor, type_list<N
 template <GMMA::Major MajorMode>
 struct MakeTensor<GMMA::smem_desc<MajorMode>>
 {
-  template <class Engine, class Layout>
+  template <class TEngine, class TLayout>
   CUTE_HOST_DEVICE constexpr auto
-  operator()(Tensor<Engine,Layout> const& smem_tensor)
+  operator()(Tensor<TEngine,TLayout> const& smem_tensor)
   {
-    static_assert(is_smem<Engine>::value, "Expected SMEM Tensor to construct a GMMA Desc Tensor");
+    static_assert(is_smem<TEngine>::value, "Expected SMEM Tensor to construct a GMMA Desc Tensor");
     return make_tensor(GMMA::DescriptorIterator{GMMA::make_gmma_desc<MajorMode>(tensor<0>(smem_tensor))},
-                       recast<uint128_t const>(smem_tensor).layout());
+                       replace<0>(recast<uint128_t const>(smem_tensor).layout(), Layout<_1,_0>{}));
   }
 };
 
@@ -420,13 +426,13 @@ using ABLayout       = Layout<Shape <_128,Shape <Int<M>,Int<K>>>,
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x16_F16F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_8,_16>;
   using ThrID   = Layout<_128>;
@@ -442,12 +448,12 @@ struct MMA_Traits<SM90_64x8x16_F16F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x16_F16F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_8,_16>;
   using ThrID   = Layout<_128>;
@@ -463,13 +469,13 @@ struct MMA_Traits<SM90_64x8x16_F16F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x16_F16F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_16,_16>;
   using ThrID   = Layout<_128>;
@@ -485,12 +491,12 @@ struct MMA_Traits<SM90_64x16x16_F16F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x16_F16F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_16,_16>;
   using ThrID   = Layout<_128>;
@@ -506,13 +512,13 @@ struct MMA_Traits<SM90_64x16x16_F16F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x16_F16F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_32,_16>;
   using ThrID   = Layout<_128>;
@@ -528,12 +534,12 @@ struct MMA_Traits<SM90_64x32x16_F16F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x16_F16F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_32,_16>;
   using ThrID   = Layout<_128>;
@@ -549,13 +555,13 @@ struct MMA_Traits<SM90_64x32x16_F16F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x16_F16F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_64,_16>;
   using ThrID   = Layout<_128>;
@@ -571,12 +577,12 @@ struct MMA_Traits<SM90_64x64x16_F16F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x16_F16F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_64,_16>;
   using ThrID   = Layout<_128>;
@@ -592,13 +598,13 @@ struct MMA_Traits<SM90_64x64x16_F16F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x16_F16F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_96,_16>;
   using ThrID   = Layout<_128>;
@@ -614,12 +620,12 @@ struct MMA_Traits<SM90_64x96x16_F16F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x16_F16F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_96,_16>;
   using ThrID   = Layout<_128>;
@@ -635,13 +641,13 @@ struct MMA_Traits<SM90_64x96x16_F16F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x16_F16F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_128,_16>;
   using ThrID   = Layout<_128>;
@@ -657,12 +663,12 @@ struct MMA_Traits<SM90_64x128x16_F16F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x16_F16F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_128,_16>;
   using ThrID   = Layout<_128>;
@@ -678,13 +684,13 @@ struct MMA_Traits<SM90_64x128x16_F16F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x16_F16F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_192,_16>;
   using ThrID   = Layout<_128>;
@@ -700,12 +706,12 @@ struct MMA_Traits<SM90_64x192x16_F16F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x16_F16F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_192,_16>;
   using ThrID   = Layout<_128>;
@@ -721,13 +727,13 @@ struct MMA_Traits<SM90_64x192x16_F16F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x16_F16F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_256,_16>;
   using ThrID   = Layout<_128>;
@@ -743,12 +749,12 @@ struct MMA_Traits<SM90_64x256x16_F16F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x16_F16F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_256,_16>;
   using ThrID   = Layout<_128>;
@@ -764,13 +770,13 @@ struct MMA_Traits<SM90_64x256x16_F16F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x16_F32F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_8,_16>;
   using ThrID   = Layout<_128>;
@@ -786,12 +792,12 @@ struct MMA_Traits<SM90_64x8x16_F32F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x16_F32F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_8,_16>;
   using ThrID   = Layout<_128>;
@@ -807,13 +813,13 @@ struct MMA_Traits<SM90_64x8x16_F32F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x16_F32F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_16,_16>;
   using ThrID   = Layout<_128>;
@@ -829,12 +835,12 @@ struct MMA_Traits<SM90_64x16x16_F32F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x16_F32F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_16,_16>;
   using ThrID   = Layout<_128>;
@@ -850,13 +856,13 @@ struct MMA_Traits<SM90_64x16x16_F32F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x16_F32F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_32,_16>;
   using ThrID   = Layout<_128>;
@@ -872,12 +878,12 @@ struct MMA_Traits<SM90_64x32x16_F32F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x16_F32F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_32,_16>;
   using ThrID   = Layout<_128>;
@@ -893,13 +899,13 @@ struct MMA_Traits<SM90_64x32x16_F32F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x16_F32F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_64,_16>;
   using ThrID   = Layout<_128>;
@@ -915,12 +921,12 @@ struct MMA_Traits<SM90_64x64x16_F32F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x16_F32F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_64,_16>;
   using ThrID   = Layout<_128>;
@@ -936,13 +942,13 @@ struct MMA_Traits<SM90_64x64x16_F32F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x16_F32F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_96,_16>;
   using ThrID   = Layout<_128>;
@@ -958,12 +964,12 @@ struct MMA_Traits<SM90_64x96x16_F32F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x16_F32F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_96,_16>;
   using ThrID   = Layout<_128>;
@@ -979,13 +985,13 @@ struct MMA_Traits<SM90_64x96x16_F32F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x16_F32F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_128,_16>;
   using ThrID   = Layout<_128>;
@@ -1001,12 +1007,12 @@ struct MMA_Traits<SM90_64x128x16_F32F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x16_F32F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_128,_16>;
   using ThrID   = Layout<_128>;
@@ -1022,13 +1028,13 @@ struct MMA_Traits<SM90_64x128x16_F32F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x16_F32F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_192,_16>;
   using ThrID   = Layout<_128>;
@@ -1044,12 +1050,12 @@ struct MMA_Traits<SM90_64x192x16_F32F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x16_F32F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_192,_16>;
   using ThrID   = Layout<_128>;
@@ -1065,13 +1071,13 @@ struct MMA_Traits<SM90_64x192x16_F32F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x16_F32F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_256,_16>;
   using ThrID   = Layout<_128>;
@@ -1087,12 +1093,12 @@ struct MMA_Traits<SM90_64x256x16_F32F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x16_F32F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = half_t;
-  using ElementBVal = half_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = half_t;
+  using ValTypeB = half_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_256,_16>;
   using ThrID   = Layout<_128>;
@@ -1108,13 +1114,13 @@ struct MMA_Traits<SM90_64x256x16_F32F16F16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x16_F32BF16BF16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = bfloat16_t;
-  using ElementBVal = bfloat16_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = bfloat16_t;
+  using ValTypeB = bfloat16_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_8,_16>;
   using ThrID   = Layout<_128>;
@@ -1130,12 +1136,12 @@ struct MMA_Traits<SM90_64x8x16_F32BF16BF16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x16_F32BF16BF16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = bfloat16_t;
-  using ElementBVal = bfloat16_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = bfloat16_t;
+  using ValTypeB = bfloat16_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_8,_16>;
   using ThrID   = Layout<_128>;
@@ -1151,13 +1157,13 @@ struct MMA_Traits<SM90_64x8x16_F32BF16BF16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x16_F32BF16BF16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = bfloat16_t;
-  using ElementBVal = bfloat16_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = bfloat16_t;
+  using ValTypeB = bfloat16_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_16,_16>;
   using ThrID   = Layout<_128>;
@@ -1173,12 +1179,12 @@ struct MMA_Traits<SM90_64x16x16_F32BF16BF16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x16_F32BF16BF16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = bfloat16_t;
-  using ElementBVal = bfloat16_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = bfloat16_t;
+  using ValTypeB = bfloat16_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_16,_16>;
   using ThrID   = Layout<_128>;
@@ -1194,13 +1200,13 @@ struct MMA_Traits<SM90_64x16x16_F32BF16BF16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x16_F32BF16BF16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = bfloat16_t;
-  using ElementBVal = bfloat16_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = bfloat16_t;
+  using ValTypeB = bfloat16_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_32,_16>;
   using ThrID   = Layout<_128>;
@@ -1216,12 +1222,12 @@ struct MMA_Traits<SM90_64x32x16_F32BF16BF16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x16_F32BF16BF16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = bfloat16_t;
-  using ElementBVal = bfloat16_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = bfloat16_t;
+  using ValTypeB = bfloat16_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_32,_16>;
   using ThrID   = Layout<_128>;
@@ -1237,13 +1243,13 @@ struct MMA_Traits<SM90_64x32x16_F32BF16BF16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x16_F32BF16BF16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = bfloat16_t;
-  using ElementBVal = bfloat16_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = bfloat16_t;
+  using ValTypeB = bfloat16_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_64,_16>;
   using ThrID   = Layout<_128>;
@@ -1259,12 +1265,12 @@ struct MMA_Traits<SM90_64x64x16_F32BF16BF16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x16_F32BF16BF16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = bfloat16_t;
-  using ElementBVal = bfloat16_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = bfloat16_t;
+  using ValTypeB = bfloat16_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_64,_16>;
   using ThrID   = Layout<_128>;
@@ -1280,13 +1286,13 @@ struct MMA_Traits<SM90_64x64x16_F32BF16BF16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x16_F32BF16BF16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = bfloat16_t;
-  using ElementBVal = bfloat16_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = bfloat16_t;
+  using ValTypeB = bfloat16_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_96,_16>;
   using ThrID   = Layout<_128>;
@@ -1302,12 +1308,12 @@ struct MMA_Traits<SM90_64x96x16_F32BF16BF16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x16_F32BF16BF16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = bfloat16_t;
-  using ElementBVal = bfloat16_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = bfloat16_t;
+  using ValTypeB = bfloat16_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_96,_16>;
   using ThrID   = Layout<_128>;
@@ -1323,13 +1329,13 @@ struct MMA_Traits<SM90_64x96x16_F32BF16BF16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x16_F32BF16BF16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = bfloat16_t;
-  using ElementBVal = bfloat16_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = bfloat16_t;
+  using ValTypeB = bfloat16_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_128,_16>;
   using ThrID   = Layout<_128>;
@@ -1345,12 +1351,12 @@ struct MMA_Traits<SM90_64x128x16_F32BF16BF16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x16_F32BF16BF16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = bfloat16_t;
-  using ElementBVal = bfloat16_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = bfloat16_t;
+  using ValTypeB = bfloat16_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_128,_16>;
   using ThrID   = Layout<_128>;
@@ -1366,13 +1372,13 @@ struct MMA_Traits<SM90_64x128x16_F32BF16BF16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x16_F32BF16BF16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = bfloat16_t;
-  using ElementBVal = bfloat16_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = bfloat16_t;
+  using ValTypeB = bfloat16_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_192,_16>;
   using ThrID   = Layout<_128>;
@@ -1388,12 +1394,12 @@ struct MMA_Traits<SM90_64x192x16_F32BF16BF16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x16_F32BF16BF16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = bfloat16_t;
-  using ElementBVal = bfloat16_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = bfloat16_t;
+  using ValTypeB = bfloat16_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_192,_16>;
   using ThrID   = Layout<_128>;
@@ -1409,13 +1415,13 @@ struct MMA_Traits<SM90_64x192x16_F32BF16BF16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x16_F32BF16BF16_SS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = bfloat16_t;
-  using ElementBVal = bfloat16_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = bfloat16_t;
+  using ValTypeB = bfloat16_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<tnspA>;
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeA = GMMA::smem_desc<tnspA>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_256,_16>;
   using ThrID   = Layout<_128>;
@@ -1431,12 +1437,12 @@ struct MMA_Traits<SM90_64x256x16_F32BF16BF16_SS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::Major tnspA, GMMA::Major tnspB, GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x16_F32BF16BF16_RS<tnspA, tnspB, scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = bfloat16_t;
-  using ElementBVal = bfloat16_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = bfloat16_t;
+  using ValTypeB = bfloat16_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<tnspB>;
+  using FrgTypeB = GMMA::smem_desc<tnspB>;
 
   using Shape_MNK = Shape<_64,_256,_16>;
   using ThrID   = Layout<_128>;
@@ -1452,13 +1458,13 @@ struct MMA_Traits<SM90_64x256x16_F32BF16BF16_RS<tnspA, tnspB, scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x8_F32TF32TF32_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = tfloat32_t;
-  using ElementBVal = tfloat32_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = tfloat32_t;
+  using ValTypeB = tfloat32_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_8>;
   using ThrID   = Layout<_128>;
@@ -1474,12 +1480,12 @@ struct MMA_Traits<SM90_64x8x8_F32TF32TF32_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x8_F32TF32TF32_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = tfloat32_t;
-  using ElementBVal = tfloat32_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = tfloat32_t;
+  using ValTypeB = tfloat32_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_8>;
   using ThrID   = Layout<_128>;
@@ -1495,13 +1501,13 @@ struct MMA_Traits<SM90_64x8x8_F32TF32TF32_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x8_F32TF32TF32_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = tfloat32_t;
-  using ElementBVal = tfloat32_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = tfloat32_t;
+  using ValTypeB = tfloat32_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_8>;
   using ThrID   = Layout<_128>;
@@ -1517,12 +1523,12 @@ struct MMA_Traits<SM90_64x16x8_F32TF32TF32_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x8_F32TF32TF32_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = tfloat32_t;
-  using ElementBVal = tfloat32_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = tfloat32_t;
+  using ValTypeB = tfloat32_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_8>;
   using ThrID   = Layout<_128>;
@@ -1538,13 +1544,13 @@ struct MMA_Traits<SM90_64x16x8_F32TF32TF32_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x8_F32TF32TF32_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = tfloat32_t;
-  using ElementBVal = tfloat32_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = tfloat32_t;
+  using ValTypeB = tfloat32_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_8>;
   using ThrID   = Layout<_128>;
@@ -1560,12 +1566,12 @@ struct MMA_Traits<SM90_64x32x8_F32TF32TF32_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x8_F32TF32TF32_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = tfloat32_t;
-  using ElementBVal = tfloat32_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = tfloat32_t;
+  using ValTypeB = tfloat32_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_8>;
   using ThrID   = Layout<_128>;
@@ -1581,13 +1587,13 @@ struct MMA_Traits<SM90_64x32x8_F32TF32TF32_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x8_F32TF32TF32_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = tfloat32_t;
-  using ElementBVal = tfloat32_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = tfloat32_t;
+  using ValTypeB = tfloat32_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_8>;
   using ThrID   = Layout<_128>;
@@ -1603,12 +1609,12 @@ struct MMA_Traits<SM90_64x64x8_F32TF32TF32_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x8_F32TF32TF32_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = tfloat32_t;
-  using ElementBVal = tfloat32_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = tfloat32_t;
+  using ValTypeB = tfloat32_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_8>;
   using ThrID   = Layout<_128>;
@@ -1624,13 +1630,13 @@ struct MMA_Traits<SM90_64x64x8_F32TF32TF32_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x8_F32TF32TF32_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = tfloat32_t;
-  using ElementBVal = tfloat32_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = tfloat32_t;
+  using ValTypeB = tfloat32_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_8>;
   using ThrID   = Layout<_128>;
@@ -1646,12 +1652,12 @@ struct MMA_Traits<SM90_64x96x8_F32TF32TF32_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x8_F32TF32TF32_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = tfloat32_t;
-  using ElementBVal = tfloat32_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = tfloat32_t;
+  using ValTypeB = tfloat32_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_8>;
   using ThrID   = Layout<_128>;
@@ -1667,13 +1673,13 @@ struct MMA_Traits<SM90_64x96x8_F32TF32TF32_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x8_F32TF32TF32_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = tfloat32_t;
-  using ElementBVal = tfloat32_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = tfloat32_t;
+  using ValTypeB = tfloat32_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_8>;
   using ThrID   = Layout<_128>;
@@ -1689,12 +1695,12 @@ struct MMA_Traits<SM90_64x128x8_F32TF32TF32_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x8_F32TF32TF32_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = tfloat32_t;
-  using ElementBVal = tfloat32_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = tfloat32_t;
+  using ValTypeB = tfloat32_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_8>;
   using ThrID   = Layout<_128>;
@@ -1710,13 +1716,13 @@ struct MMA_Traits<SM90_64x128x8_F32TF32TF32_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x8_F32TF32TF32_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = tfloat32_t;
-  using ElementBVal = tfloat32_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = tfloat32_t;
+  using ValTypeB = tfloat32_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_8>;
   using ThrID   = Layout<_128>;
@@ -1732,12 +1738,12 @@ struct MMA_Traits<SM90_64x192x8_F32TF32TF32_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x8_F32TF32TF32_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = tfloat32_t;
-  using ElementBVal = tfloat32_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = tfloat32_t;
+  using ValTypeB = tfloat32_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_8>;
   using ThrID   = Layout<_128>;
@@ -1753,13 +1759,13 @@ struct MMA_Traits<SM90_64x192x8_F32TF32TF32_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x8_F32TF32TF32_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = tfloat32_t;
-  using ElementBVal = tfloat32_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = tfloat32_t;
+  using ValTypeB = tfloat32_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_8>;
   using ThrID   = Layout<_128>;
@@ -1775,12 +1781,12 @@ struct MMA_Traits<SM90_64x256x8_F32TF32TF32_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x8_F32TF32TF32_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = tfloat32_t;
-  using ElementBVal = tfloat32_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = tfloat32_t;
+  using ValTypeB = tfloat32_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_8>;
   using ThrID   = Layout<_128>;
@@ -1796,13 +1802,13 @@ struct MMA_Traits<SM90_64x256x8_F32TF32TF32_RS_TN<scaleA, scaleB>>
 template <>
 struct MMA_Traits<SM90_64x8x32_S32S8S8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -1818,13 +1824,13 @@ struct MMA_Traits<SM90_64x8x32_S32S8S8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x16x32_S32S8S8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -1840,13 +1846,13 @@ struct MMA_Traits<SM90_64x16x32_S32S8S8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x32x32_S32S8S8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -1862,13 +1868,13 @@ struct MMA_Traits<SM90_64x32x32_S32S8S8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x64x32_S32S8S8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -1884,13 +1890,13 @@ struct MMA_Traits<SM90_64x64x32_S32S8S8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x96x32_S32S8S8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -1906,13 +1912,13 @@ struct MMA_Traits<SM90_64x96x32_S32S8S8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x128x32_S32S8S8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -1928,13 +1934,13 @@ struct MMA_Traits<SM90_64x128x32_S32S8S8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x192x32_S32S8S8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -1950,13 +1956,13 @@ struct MMA_Traits<SM90_64x192x32_S32S8S8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x256x32_S32S8S8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -1972,12 +1978,12 @@ struct MMA_Traits<SM90_64x256x32_S32S8S8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x8x32_S32S8S8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -1993,12 +1999,12 @@ struct MMA_Traits<SM90_64x8x32_S32S8S8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x16x32_S32S8S8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -2014,12 +2020,12 @@ struct MMA_Traits<SM90_64x16x32_S32S8S8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x32x32_S32S8S8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -2035,12 +2041,12 @@ struct MMA_Traits<SM90_64x32x32_S32S8S8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x64x32_S32S8S8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -2056,12 +2062,12 @@ struct MMA_Traits<SM90_64x64x32_S32S8S8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x96x32_S32S8S8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -2077,12 +2083,12 @@ struct MMA_Traits<SM90_64x96x32_S32S8S8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x128x32_S32S8S8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -2098,12 +2104,12 @@ struct MMA_Traits<SM90_64x128x32_S32S8S8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x192x32_S32S8S8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -2119,12 +2125,12 @@ struct MMA_Traits<SM90_64x192x32_S32S8S8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x256x32_S32S8S8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -2140,13 +2146,13 @@ struct MMA_Traits<SM90_64x256x32_S32S8S8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x8x32_S32S8U8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -2162,13 +2168,13 @@ struct MMA_Traits<SM90_64x8x32_S32S8U8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x16x32_S32S8U8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -2184,13 +2190,13 @@ struct MMA_Traits<SM90_64x16x32_S32S8U8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x32x32_S32S8U8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -2206,13 +2212,13 @@ struct MMA_Traits<SM90_64x32x32_S32S8U8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x64x32_S32S8U8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -2228,13 +2234,13 @@ struct MMA_Traits<SM90_64x64x32_S32S8U8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x96x32_S32S8U8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -2250,13 +2256,13 @@ struct MMA_Traits<SM90_64x96x32_S32S8U8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x128x32_S32S8U8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -2272,13 +2278,13 @@ struct MMA_Traits<SM90_64x128x32_S32S8U8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x192x32_S32S8U8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -2294,13 +2300,13 @@ struct MMA_Traits<SM90_64x192x32_S32S8U8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x256x32_S32S8U8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -2316,12 +2322,12 @@ struct MMA_Traits<SM90_64x256x32_S32S8U8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x8x32_S32S8U8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -2337,12 +2343,12 @@ struct MMA_Traits<SM90_64x8x32_S32S8U8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x16x32_S32S8U8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -2358,12 +2364,12 @@ struct MMA_Traits<SM90_64x16x32_S32S8U8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x32x32_S32S8U8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -2379,12 +2385,12 @@ struct MMA_Traits<SM90_64x32x32_S32S8U8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x64x32_S32S8U8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -2400,12 +2406,12 @@ struct MMA_Traits<SM90_64x64x32_S32S8U8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x96x32_S32S8U8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -2421,12 +2427,12 @@ struct MMA_Traits<SM90_64x96x32_S32S8U8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x128x32_S32S8U8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -2442,12 +2448,12 @@ struct MMA_Traits<SM90_64x128x32_S32S8U8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x192x32_S32S8U8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -2463,12 +2469,12 @@ struct MMA_Traits<SM90_64x192x32_S32S8U8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x256x32_S32S8U8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = int8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = int8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -2484,13 +2490,13 @@ struct MMA_Traits<SM90_64x256x32_S32S8U8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x8x32_S32U8S8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -2506,13 +2512,13 @@ struct MMA_Traits<SM90_64x8x32_S32U8S8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x16x32_S32U8S8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -2528,13 +2534,13 @@ struct MMA_Traits<SM90_64x16x32_S32U8S8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x32x32_S32U8S8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -2550,13 +2556,13 @@ struct MMA_Traits<SM90_64x32x32_S32U8S8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x64x32_S32U8S8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -2572,13 +2578,13 @@ struct MMA_Traits<SM90_64x64x32_S32U8S8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x96x32_S32U8S8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -2594,13 +2600,13 @@ struct MMA_Traits<SM90_64x96x32_S32U8S8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x128x32_S32U8S8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -2616,13 +2622,13 @@ struct MMA_Traits<SM90_64x128x32_S32U8S8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x192x32_S32U8S8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -2638,13 +2644,13 @@ struct MMA_Traits<SM90_64x192x32_S32U8S8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x256x32_S32U8S8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -2660,12 +2666,12 @@ struct MMA_Traits<SM90_64x256x32_S32U8S8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x8x32_S32U8S8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -2681,12 +2687,12 @@ struct MMA_Traits<SM90_64x8x32_S32U8S8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x16x32_S32U8S8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -2702,12 +2708,12 @@ struct MMA_Traits<SM90_64x16x32_S32U8S8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x32x32_S32U8S8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -2723,12 +2729,12 @@ struct MMA_Traits<SM90_64x32x32_S32U8S8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x64x32_S32U8S8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -2744,12 +2750,12 @@ struct MMA_Traits<SM90_64x64x32_S32U8S8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x96x32_S32U8S8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -2765,12 +2771,12 @@ struct MMA_Traits<SM90_64x96x32_S32U8S8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x128x32_S32U8S8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -2786,12 +2792,12 @@ struct MMA_Traits<SM90_64x128x32_S32U8S8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x192x32_S32U8S8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -2807,12 +2813,12 @@ struct MMA_Traits<SM90_64x192x32_S32U8S8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x256x32_S32U8S8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = int8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = int8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -2828,13 +2834,13 @@ struct MMA_Traits<SM90_64x256x32_S32U8S8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x8x32_S32U8U8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -2850,13 +2856,13 @@ struct MMA_Traits<SM90_64x8x32_S32U8U8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x16x32_S32U8U8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -2872,13 +2878,13 @@ struct MMA_Traits<SM90_64x16x32_S32U8U8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x32x32_S32U8U8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -2894,13 +2900,13 @@ struct MMA_Traits<SM90_64x32x32_S32U8U8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x64x32_S32U8U8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -2916,13 +2922,13 @@ struct MMA_Traits<SM90_64x64x32_S32U8U8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x96x32_S32U8U8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -2938,13 +2944,13 @@ struct MMA_Traits<SM90_64x96x32_S32U8U8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x128x32_S32U8U8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -2960,13 +2966,13 @@ struct MMA_Traits<SM90_64x128x32_S32U8U8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x192x32_S32U8U8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -2982,13 +2988,13 @@ struct MMA_Traits<SM90_64x192x32_S32U8U8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x256x32_S32U8U8_SS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -3004,12 +3010,12 @@ struct MMA_Traits<SM90_64x256x32_S32U8U8_SS_TN>
 template <>
 struct MMA_Traits<SM90_64x8x32_S32U8U8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -3025,12 +3031,12 @@ struct MMA_Traits<SM90_64x8x32_S32U8U8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x16x32_S32U8U8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -3046,12 +3052,12 @@ struct MMA_Traits<SM90_64x16x32_S32U8U8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x32x32_S32U8U8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -3067,12 +3073,12 @@ struct MMA_Traits<SM90_64x32x32_S32U8U8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x64x32_S32U8U8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -3088,12 +3094,12 @@ struct MMA_Traits<SM90_64x64x32_S32U8U8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x96x32_S32U8U8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -3109,12 +3115,12 @@ struct MMA_Traits<SM90_64x96x32_S32U8U8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x128x32_S32U8U8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -3130,12 +3136,12 @@ struct MMA_Traits<SM90_64x128x32_S32U8U8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x192x32_S32U8U8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -3151,12 +3157,12 @@ struct MMA_Traits<SM90_64x192x32_S32U8U8_RS_TN>
 template <>
 struct MMA_Traits<SM90_64x256x32_S32U8U8_RS_TN>
 {
-  using ElementDVal = int32_t;
-  using ElementAVal = uint8_t;
-  using ElementBVal = uint8_t;
-  using ElementCVal = int32_t;
+  using ValTypeD = int32_t;
+  using ValTypeA = uint8_t;
+  using ValTypeB = uint8_t;
+  using ValTypeC = int32_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -3172,13 +3178,13 @@ struct MMA_Traits<SM90_64x256x32_S32U8U8_RS_TN>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x32_F16E4M3E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -3194,12 +3200,12 @@ struct MMA_Traits<SM90_64x8x32_F16E4M3E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x32_F16E4M3E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -3215,13 +3221,13 @@ struct MMA_Traits<SM90_64x8x32_F16E4M3E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x32_F32E4M3E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -3237,12 +3243,12 @@ struct MMA_Traits<SM90_64x8x32_F32E4M3E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x32_F32E4M3E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -3258,13 +3264,13 @@ struct MMA_Traits<SM90_64x8x32_F32E4M3E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x32_F16E4M3E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -3280,12 +3286,12 @@ struct MMA_Traits<SM90_64x16x32_F16E4M3E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x32_F16E4M3E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -3301,13 +3307,13 @@ struct MMA_Traits<SM90_64x16x32_F16E4M3E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x32_F32E4M3E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -3323,12 +3329,12 @@ struct MMA_Traits<SM90_64x16x32_F32E4M3E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x32_F32E4M3E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -3344,13 +3350,13 @@ struct MMA_Traits<SM90_64x16x32_F32E4M3E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x32_F16E4M3E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -3366,12 +3372,12 @@ struct MMA_Traits<SM90_64x32x32_F16E4M3E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x32_F16E4M3E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -3387,13 +3393,13 @@ struct MMA_Traits<SM90_64x32x32_F16E4M3E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x32_F32E4M3E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -3409,12 +3415,12 @@ struct MMA_Traits<SM90_64x32x32_F32E4M3E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x32_F32E4M3E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -3430,13 +3436,13 @@ struct MMA_Traits<SM90_64x32x32_F32E4M3E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x32_F16E4M3E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -3452,12 +3458,12 @@ struct MMA_Traits<SM90_64x64x32_F16E4M3E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x32_F16E4M3E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -3473,13 +3479,13 @@ struct MMA_Traits<SM90_64x64x32_F16E4M3E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x32_F32E4M3E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -3495,12 +3501,12 @@ struct MMA_Traits<SM90_64x64x32_F32E4M3E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x32_F32E4M3E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -3516,13 +3522,13 @@ struct MMA_Traits<SM90_64x64x32_F32E4M3E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x32_F16E4M3E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -3538,12 +3544,12 @@ struct MMA_Traits<SM90_64x96x32_F16E4M3E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x32_F16E4M3E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -3559,13 +3565,13 @@ struct MMA_Traits<SM90_64x96x32_F16E4M3E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x32_F32E4M3E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -3581,12 +3587,12 @@ struct MMA_Traits<SM90_64x96x32_F32E4M3E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x32_F32E4M3E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -3602,13 +3608,13 @@ struct MMA_Traits<SM90_64x96x32_F32E4M3E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x32_F16E4M3E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -3624,12 +3630,12 @@ struct MMA_Traits<SM90_64x128x32_F16E4M3E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x32_F16E4M3E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -3645,13 +3651,13 @@ struct MMA_Traits<SM90_64x128x32_F16E4M3E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x32_F32E4M3E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -3667,12 +3673,12 @@ struct MMA_Traits<SM90_64x128x32_F32E4M3E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x32_F32E4M3E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -3688,13 +3694,13 @@ struct MMA_Traits<SM90_64x128x32_F32E4M3E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x32_F16E4M3E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -3710,12 +3716,12 @@ struct MMA_Traits<SM90_64x192x32_F16E4M3E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x32_F16E4M3E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -3731,13 +3737,13 @@ struct MMA_Traits<SM90_64x192x32_F16E4M3E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x32_F32E4M3E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -3753,12 +3759,12 @@ struct MMA_Traits<SM90_64x192x32_F32E4M3E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x32_F32E4M3E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -3774,13 +3780,13 @@ struct MMA_Traits<SM90_64x192x32_F32E4M3E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x32_F16E4M3E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -3796,12 +3802,12 @@ struct MMA_Traits<SM90_64x256x32_F16E4M3E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x32_F16E4M3E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -3817,13 +3823,13 @@ struct MMA_Traits<SM90_64x256x32_F16E4M3E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x32_F32E4M3E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -3839,12 +3845,12 @@ struct MMA_Traits<SM90_64x256x32_F32E4M3E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x32_F32E4M3E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -3860,13 +3866,13 @@ struct MMA_Traits<SM90_64x256x32_F32E4M3E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x32_F16E4M3E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -3882,12 +3888,12 @@ struct MMA_Traits<SM90_64x8x32_F16E4M3E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x32_F16E4M3E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -3903,13 +3909,13 @@ struct MMA_Traits<SM90_64x8x32_F16E4M3E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x32_F32E4M3E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -3925,12 +3931,12 @@ struct MMA_Traits<SM90_64x8x32_F32E4M3E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x32_F32E4M3E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -3946,13 +3952,13 @@ struct MMA_Traits<SM90_64x8x32_F32E4M3E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x32_F16E4M3E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -3968,12 +3974,12 @@ struct MMA_Traits<SM90_64x16x32_F16E4M3E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x32_F16E4M3E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -3989,13 +3995,13 @@ struct MMA_Traits<SM90_64x16x32_F16E4M3E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x32_F32E4M3E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -4011,12 +4017,12 @@ struct MMA_Traits<SM90_64x16x32_F32E4M3E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x32_F32E4M3E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -4032,13 +4038,13 @@ struct MMA_Traits<SM90_64x16x32_F32E4M3E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x32_F16E4M3E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -4054,12 +4060,12 @@ struct MMA_Traits<SM90_64x32x32_F16E4M3E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x32_F16E4M3E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -4075,13 +4081,13 @@ struct MMA_Traits<SM90_64x32x32_F16E4M3E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x32_F32E4M3E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -4097,12 +4103,12 @@ struct MMA_Traits<SM90_64x32x32_F32E4M3E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x32_F32E4M3E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -4118,13 +4124,13 @@ struct MMA_Traits<SM90_64x32x32_F32E4M3E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x32_F16E4M3E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -4140,12 +4146,12 @@ struct MMA_Traits<SM90_64x64x32_F16E4M3E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x32_F16E4M3E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -4161,13 +4167,13 @@ struct MMA_Traits<SM90_64x64x32_F16E4M3E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x32_F32E4M3E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -4183,12 +4189,12 @@ struct MMA_Traits<SM90_64x64x32_F32E4M3E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x32_F32E4M3E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -4204,13 +4210,13 @@ struct MMA_Traits<SM90_64x64x32_F32E4M3E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x32_F16E4M3E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -4226,12 +4232,12 @@ struct MMA_Traits<SM90_64x96x32_F16E4M3E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x32_F16E4M3E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -4247,13 +4253,13 @@ struct MMA_Traits<SM90_64x96x32_F16E4M3E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x32_F32E4M3E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -4269,12 +4275,12 @@ struct MMA_Traits<SM90_64x96x32_F32E4M3E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x32_F32E4M3E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -4290,13 +4296,13 @@ struct MMA_Traits<SM90_64x96x32_F32E4M3E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x32_F16E4M3E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -4312,12 +4318,12 @@ struct MMA_Traits<SM90_64x128x32_F16E4M3E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x32_F16E4M3E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -4333,13 +4339,13 @@ struct MMA_Traits<SM90_64x128x32_F16E4M3E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x32_F32E4M3E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -4355,12 +4361,12 @@ struct MMA_Traits<SM90_64x128x32_F32E4M3E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x32_F32E4M3E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -4376,13 +4382,13 @@ struct MMA_Traits<SM90_64x128x32_F32E4M3E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x32_F16E4M3E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -4398,12 +4404,12 @@ struct MMA_Traits<SM90_64x192x32_F16E4M3E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x32_F16E4M3E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -4419,13 +4425,13 @@ struct MMA_Traits<SM90_64x192x32_F16E4M3E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x32_F32E4M3E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -4441,12 +4447,12 @@ struct MMA_Traits<SM90_64x192x32_F32E4M3E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x32_F32E4M3E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -4462,13 +4468,13 @@ struct MMA_Traits<SM90_64x192x32_F32E4M3E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x32_F16E4M3E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -4484,12 +4490,12 @@ struct MMA_Traits<SM90_64x256x32_F16E4M3E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x32_F16E4M3E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -4505,13 +4511,13 @@ struct MMA_Traits<SM90_64x256x32_F16E4M3E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x32_F32E4M3E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -4527,12 +4533,12 @@ struct MMA_Traits<SM90_64x256x32_F32E4M3E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x32_F32E4M3E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e4m3_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e4m3_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -4548,13 +4554,13 @@ struct MMA_Traits<SM90_64x256x32_F32E4M3E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x32_F16E5M2E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -4570,12 +4576,12 @@ struct MMA_Traits<SM90_64x8x32_F16E5M2E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x32_F16E5M2E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -4591,13 +4597,13 @@ struct MMA_Traits<SM90_64x8x32_F16E5M2E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x32_F32E5M2E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -4613,12 +4619,12 @@ struct MMA_Traits<SM90_64x8x32_F32E5M2E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x32_F32E5M2E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -4634,13 +4640,13 @@ struct MMA_Traits<SM90_64x8x32_F32E5M2E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x32_F16E5M2E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -4656,12 +4662,12 @@ struct MMA_Traits<SM90_64x16x32_F16E5M2E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x32_F16E5M2E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -4677,13 +4683,13 @@ struct MMA_Traits<SM90_64x16x32_F16E5M2E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x32_F32E5M2E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -4699,12 +4705,12 @@ struct MMA_Traits<SM90_64x16x32_F32E5M2E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x32_F32E5M2E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -4720,13 +4726,13 @@ struct MMA_Traits<SM90_64x16x32_F32E5M2E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x32_F16E5M2E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -4742,12 +4748,12 @@ struct MMA_Traits<SM90_64x32x32_F16E5M2E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x32_F16E5M2E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -4763,13 +4769,13 @@ struct MMA_Traits<SM90_64x32x32_F16E5M2E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x32_F32E5M2E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -4785,12 +4791,12 @@ struct MMA_Traits<SM90_64x32x32_F32E5M2E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x32_F32E5M2E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -4806,13 +4812,13 @@ struct MMA_Traits<SM90_64x32x32_F32E5M2E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x32_F16E5M2E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -4828,12 +4834,12 @@ struct MMA_Traits<SM90_64x64x32_F16E5M2E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x32_F16E5M2E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -4849,13 +4855,13 @@ struct MMA_Traits<SM90_64x64x32_F16E5M2E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x32_F32E5M2E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -4871,12 +4877,12 @@ struct MMA_Traits<SM90_64x64x32_F32E5M2E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x32_F32E5M2E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -4892,13 +4898,13 @@ struct MMA_Traits<SM90_64x64x32_F32E5M2E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x32_F16E5M2E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -4914,12 +4920,12 @@ struct MMA_Traits<SM90_64x96x32_F16E5M2E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x32_F16E5M2E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -4935,13 +4941,13 @@ struct MMA_Traits<SM90_64x96x32_F16E5M2E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x32_F32E5M2E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -4957,12 +4963,12 @@ struct MMA_Traits<SM90_64x96x32_F32E5M2E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x32_F32E5M2E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -4978,13 +4984,13 @@ struct MMA_Traits<SM90_64x96x32_F32E5M2E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x32_F16E5M2E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -5000,12 +5006,12 @@ struct MMA_Traits<SM90_64x128x32_F16E5M2E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x32_F16E5M2E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -5021,13 +5027,13 @@ struct MMA_Traits<SM90_64x128x32_F16E5M2E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x32_F32E5M2E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -5043,12 +5049,12 @@ struct MMA_Traits<SM90_64x128x32_F32E5M2E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x32_F32E5M2E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -5064,13 +5070,13 @@ struct MMA_Traits<SM90_64x128x32_F32E5M2E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x32_F16E5M2E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -5086,12 +5092,12 @@ struct MMA_Traits<SM90_64x192x32_F16E5M2E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x32_F16E5M2E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -5107,13 +5113,13 @@ struct MMA_Traits<SM90_64x192x32_F16E5M2E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x32_F32E5M2E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -5129,12 +5135,12 @@ struct MMA_Traits<SM90_64x192x32_F32E5M2E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x32_F32E5M2E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -5150,13 +5156,13 @@ struct MMA_Traits<SM90_64x192x32_F32E5M2E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x32_F16E5M2E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -5172,12 +5178,12 @@ struct MMA_Traits<SM90_64x256x32_F16E5M2E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x32_F16E5M2E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -5193,13 +5199,13 @@ struct MMA_Traits<SM90_64x256x32_F16E5M2E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x32_F32E5M2E4M3_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -5215,12 +5221,12 @@ struct MMA_Traits<SM90_64x256x32_F32E5M2E4M3_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x32_F32E5M2E4M3_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e4m3_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e4m3_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -5236,13 +5242,13 @@ struct MMA_Traits<SM90_64x256x32_F32E5M2E4M3_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x32_F16E5M2E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -5258,12 +5264,12 @@ struct MMA_Traits<SM90_64x8x32_F16E5M2E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x32_F16E5M2E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -5279,13 +5285,13 @@ struct MMA_Traits<SM90_64x8x32_F16E5M2E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x32_F32E5M2E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -5301,12 +5307,12 @@ struct MMA_Traits<SM90_64x8x32_F32E5M2E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x8x32_F32E5M2E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_8,_32>;
   using ThrID   = Layout<_128>;
@@ -5322,13 +5328,13 @@ struct MMA_Traits<SM90_64x8x32_F32E5M2E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x32_F16E5M2E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -5344,12 +5350,12 @@ struct MMA_Traits<SM90_64x16x32_F16E5M2E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x32_F16E5M2E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -5365,13 +5371,13 @@ struct MMA_Traits<SM90_64x16x32_F16E5M2E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x32_F32E5M2E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -5387,12 +5393,12 @@ struct MMA_Traits<SM90_64x16x32_F32E5M2E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x16x32_F32E5M2E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_16,_32>;
   using ThrID   = Layout<_128>;
@@ -5408,13 +5414,13 @@ struct MMA_Traits<SM90_64x16x32_F32E5M2E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x32_F16E5M2E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -5430,12 +5436,12 @@ struct MMA_Traits<SM90_64x32x32_F16E5M2E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x32_F16E5M2E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -5451,13 +5457,13 @@ struct MMA_Traits<SM90_64x32x32_F16E5M2E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x32_F32E5M2E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -5473,12 +5479,12 @@ struct MMA_Traits<SM90_64x32x32_F32E5M2E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x32x32_F32E5M2E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_32,_32>;
   using ThrID   = Layout<_128>;
@@ -5494,13 +5500,13 @@ struct MMA_Traits<SM90_64x32x32_F32E5M2E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x32_F16E5M2E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -5516,12 +5522,12 @@ struct MMA_Traits<SM90_64x64x32_F16E5M2E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x32_F16E5M2E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -5537,13 +5543,13 @@ struct MMA_Traits<SM90_64x64x32_F16E5M2E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x32_F32E5M2E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -5559,12 +5565,12 @@ struct MMA_Traits<SM90_64x64x32_F32E5M2E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x64x32_F32E5M2E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_64,_32>;
   using ThrID   = Layout<_128>;
@@ -5580,13 +5586,13 @@ struct MMA_Traits<SM90_64x64x32_F32E5M2E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x32_F16E5M2E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -5602,12 +5608,12 @@ struct MMA_Traits<SM90_64x96x32_F16E5M2E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x32_F16E5M2E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -5623,13 +5629,13 @@ struct MMA_Traits<SM90_64x96x32_F16E5M2E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x32_F32E5M2E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -5645,12 +5651,12 @@ struct MMA_Traits<SM90_64x96x32_F32E5M2E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x96x32_F32E5M2E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_96,_32>;
   using ThrID   = Layout<_128>;
@@ -5666,13 +5672,13 @@ struct MMA_Traits<SM90_64x96x32_F32E5M2E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x32_F16E5M2E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -5688,12 +5694,12 @@ struct MMA_Traits<SM90_64x128x32_F16E5M2E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x32_F16E5M2E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -5709,13 +5715,13 @@ struct MMA_Traits<SM90_64x128x32_F16E5M2E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x32_F32E5M2E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -5731,12 +5737,12 @@ struct MMA_Traits<SM90_64x128x32_F32E5M2E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x128x32_F32E5M2E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_128,_32>;
   using ThrID   = Layout<_128>;
@@ -5752,13 +5758,13 @@ struct MMA_Traits<SM90_64x128x32_F32E5M2E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x32_F16E5M2E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -5774,12 +5780,12 @@ struct MMA_Traits<SM90_64x192x32_F16E5M2E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x32_F16E5M2E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -5795,13 +5801,13 @@ struct MMA_Traits<SM90_64x192x32_F16E5M2E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x32_F32E5M2E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -5817,12 +5823,12 @@ struct MMA_Traits<SM90_64x192x32_F32E5M2E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x192x32_F32E5M2E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_192,_32>;
   using ThrID   = Layout<_128>;
@@ -5838,13 +5844,13 @@ struct MMA_Traits<SM90_64x192x32_F32E5M2E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x32_F16E5M2E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -5860,12 +5866,12 @@ struct MMA_Traits<SM90_64x256x32_F16E5M2E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x32_F16E5M2E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = half_t;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = half_t;
+  using ValTypeD = half_t;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = half_t;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -5881,13 +5887,13 @@ struct MMA_Traits<SM90_64x256x32_F16E5M2E5M2_RS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x32_F32E5M2E5M2_SS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementAFrg = GMMA::smem_desc<GMMA::Major::K>;
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeA = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;
@@ -5903,12 +5909,12 @@ struct MMA_Traits<SM90_64x256x32_F32E5M2E5M2_SS_TN<scaleA, scaleB>>
 template <GMMA::ScaleIn scaleA, GMMA::ScaleIn scaleB>
 struct MMA_Traits<SM90_64x256x32_F32E5M2E5M2_RS_TN<scaleA, scaleB>>
 {
-  using ElementDVal = float;
-  using ElementAVal = float_e5m2_t;
-  using ElementBVal = float_e5m2_t;
-  using ElementCVal = float;
+  using ValTypeD = float;
+  using ValTypeA = float_e5m2_t;
+  using ValTypeB = float_e5m2_t;
+  using ValTypeC = float;
 
-  using ElementBFrg = GMMA::smem_desc<GMMA::Major::K>;
+  using FrgTypeB = GMMA::smem_desc<GMMA::Major::K>;
 
   using Shape_MNK = Shape<_64,_256,_32>;
   using ThrID   = Layout<_128>;

@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -71,23 +71,10 @@ struct Sm90AccFetch : Sm90VisitorImpl<> {
 
   template <
     bool ReferenceSrc, // do register tensors reference the src or dst layout of the tiled copy
-    class ProblemShapeMNKL,
-    class TileShapeMNK,
-    class TileCoordMNKL,
-    class EpilogueTile,
-    class TiledCopy,
-    class SrcTensor
+    class... Args
   >
   CUTLASS_DEVICE auto
-  get_consumer_store_callbacks(
-      ProblemShapeMNKL problem_shape_mnkl,
-      TileShapeMNK tile_shape_mnk,
-      TileCoordMNKL tile_coord_mnkl,
-      EpilogueTile epi_tile,
-      TiledCopy tiled_copy,
-      int thread_idx,
-      SrcTensor const& tCrC) {
-
+  get_consumer_store_callbacks(ConsumerStoreArgs<Args...> const& args) {
     return ConsumerStoreCallbacks{};
   }
 };
@@ -98,16 +85,22 @@ using Sm90SplitTreeFetch = Sm90AccFetch;
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 // returns C
+template <class Element>
 struct Sm90SrcFetch : Sm90VisitorImpl<> {
 
   CUTLASS_DEVICE bool
   is_producer_load_needed() const {
-    return true;
+    return is_C_load_needed();
   }
 
   CUTLASS_DEVICE bool
   is_C_load_needed() const {
-    return true;
+    return not is_void_v<Element>;
+  }
+
+  CUTLASS_DEVICE bool
+  is_zero() const {
+    return is_void_v<Element>;
   }
 
   using Sm90VisitorImpl<>::Sm90VisitorImpl;
@@ -118,7 +111,6 @@ struct Sm90SrcFetch : Sm90VisitorImpl<> {
     ConsumerStoreCallbacks(SrcTensor const& tCrC)
       : tCrC(tCrC) {}
 
-    // make this a pointer if we need default ctor for generic tuple of visitors
     SrcTensor const& tCrC;                                                                         // (CPY,CPY_M,CPY_N)
 
     template <typename ElementAccumulator, int FragmentSize>
@@ -131,24 +123,12 @@ struct Sm90SrcFetch : Sm90VisitorImpl<> {
 
   template <
     bool ReferenceSrc, // do register tensors reference the src or dst layout of the tiled copy
-    class ProblemShapeMNKL,
-    class TileShapeMNK,
-    class TileCoordMNKL,
-    class EpilogueTile,
-    class TiledCopy,
-    class SrcTensor
+    class... Args
   >
   CUTLASS_DEVICE auto
-  get_consumer_store_callbacks(
-      ProblemShapeMNKL problem_shape_mnkl,
-      TileShapeMNK tile_shape_mnk,
-      TileCoordMNKL tile_coord_mnkl,
-      EpilogueTile epi_tile,
-      TiledCopy tiled_copy,
-      int thread_idx,
-      SrcTensor const& tCrC) {
-
-    return ConsumerStoreCallbacks(tCrC);
+  get_consumer_store_callbacks(ConsumerStoreArgs<Args...> const& args) {
+    // register type may differ from logical type so we can't assert matching types here
+    return ConsumerStoreCallbacks(args.tCrC);
   }
 };
 
@@ -183,6 +163,9 @@ struct Sm90AuxLoad {
       SmemLayoutTma{},
       make_shape(size<0>(shape(EpilogueTile{})), size<1>(shape(EpilogueTile{})), Int<Stages>{}),
       cute::conditional_t<is_m_major, Step<_2,_1,_3>, Step<_1,_2,_3>>{} ));
+  using CopyOpG2S =
+      SM90_TMA_LOAD
+    ;
 
   struct SharedStorage {
     alignas(cutlass::detail::alignment_for_swizzle(SmemLayout{}))
@@ -197,9 +180,9 @@ struct Sm90AuxLoad {
 
   struct Params {
     using TMA_Aux = decltype(make_tma_copy(
-        SM90_TMA_LOAD{},
-        make_tensor(static_cast<Element const*>(nullptr), repeat_like(StrideMNL{}, int32_t(0)), StrideMNL{}),
-        SmemLayoutTma{}));
+        CopyOpG2S{},
+        make_tensor(make_gmem_ptr(static_cast<Element const*>(nullptr)), repeat_like(StrideMNL{}, int32_t(0)), append<3>(StrideMNL{}, _0{})),
+        take<0,2>(SmemLayoutTma{})));
     TMA_Aux tma_load_aux;
     Element null_default = Element(0);
     bool use_default = false;
@@ -211,9 +194,11 @@ struct Sm90AuxLoad {
     // Optionally append 1s until problem shape is rank-4 in case its is only rank-3 (MNK)
     auto problem_shape_mnkl = append<4>(problem_shape, 1);
     auto [M, N, K, L] = problem_shape_mnkl;
-
-    Tensor tensor_aux = make_tensor(args.ptr_aux, make_layout(make_shape(M,N,L), args.dAux));
-    typename Params::TMA_Aux tma_load_aux = make_tma_copy(SM90_TMA_LOAD{}, tensor_aux, SmemLayoutTma{});
+    auto M_AUX =
+        size(M)
+      ;
+    Tensor tensor_aux = make_tensor(make_gmem_ptr(args.ptr_aux), make_layout(make_shape(M_AUX,N,L), append<3>(args.dAux, _0{})));
+    typename Params::TMA_Aux tma_load_aux = make_tma_copy(CopyOpG2S{}, tensor_aux, take<0,2>(SmemLayoutTma{}));
 
     bool use_default = false;
     if constexpr (EnableNullptr) {
@@ -221,6 +206,19 @@ struct Sm90AuxLoad {
     }
 
     return Params{tma_load_aux, args.null_default, use_default};
+  }
+
+  template <class ProblemShape>
+  static size_t
+  get_workspace_size(ProblemShape const& problem_shape, Arguments const& args) {
+    return 0;
+  }
+
+  template <class ProblemShape>
+  static cutlass::Status
+  initialize_workspace(ProblemShape const& problem_shape, Arguments const& args, void* workspace, cudaStream_t stream,
+    CudaHostAdapter* cuda_adapter = nullptr) {
+    return cutlass::Status::kSuccess;
   }
 
   CUTLASS_HOST_DEVICE
@@ -242,6 +240,11 @@ struct Sm90AuxLoad {
   CUTLASS_DEVICE bool
   is_C_load_needed() const {
     return false;
+  }
+
+  CUTLASS_DEVICE bool
+  is_zero() const {
+    return (params_ptr->use_default && params_ptr->null_default == Element(0));
   }
 
   template <class GTensor, class STensor>
@@ -266,7 +269,7 @@ struct Sm90AuxLoad {
 
       if (issue_tma_load) {
         // Increment the expected transaction bytes of the current stage's mbarrier by the subtile's byte-size
-        constexpr uint32_t copy_bytes = size(take<0,2>(SmemLayout{})) * sizeof_bytes_v<Element>;
+        constexpr uint32_t copy_bytes = size(take<0,2>(SmemLayout{})) * sizeof_bits_v<Element> / 8;
         cutlass::arch::ClusterTransactionBarrier::expect_transaction(full_mbarrier_ptr, copy_bytes);
         // Issue the TMA load
         constexpr uint16_t mcast_mask = 0;
@@ -277,32 +280,27 @@ struct Sm90AuxLoad {
     }
   };
 
-  template <
-    class ProblemShapeMNKL,
-    class TileShapeMNK,
-    class TileCoordMNKL
-  >
+  template <class... Args>
   CUTLASS_DEVICE auto
-  get_producer_load_callbacks(
-      ProblemShapeMNKL problem_shape_mnkl,
-      TileShapeMNK tile_shape_mnk,
-      TileCoordMNKL tile_coord_mnkl,
-      EpilogueTile epi_tile,
-      int thread_idx) {
+  get_producer_load_callbacks(ProducerLoadArgs<Args...> const& args) {
 
-    auto [M, N, K, L] = problem_shape_mnkl;
-    auto [m, n, k, l] = tile_coord_mnkl;
-    Tensor mAux = params_ptr->tma_load_aux.get_tma_tensor(make_shape(M,N,L));                                // (M,N,L)
-    Tensor gAux = local_tile(mAux, take<0,2>(tile_shape_mnk), make_coord(m,n,l));                      // (CTA_M,CTA_N)
+    auto [M, N, K, L] = args.problem_shape_mnkl;
+    auto [m, n, k, l] = args.tile_coord_mnkl;
+    auto coord_shape =
+        make_coord(m, n, l)
+      ;
+    Tensor mAux_mn = params_ptr->tma_load_aux.get_tma_tensor(make_shape(M,N,L));                             // (M,N,L)
+    Tensor mAux = coalesce(mAux_mn, take<0,2>(args.tile_shape_mnk));
+    Tensor gAux = local_tile(mAux, take<0,2>(args.tile_shape_mnk), coord_shape);                       // (CTA_M,CTA_N)
 
-    Tensor gAux_epi = local_tile(gAux, epi_tile, _);                             // (EPI_TILE_M,EPI_TILE_N,EPI_M,EPI_N)
+    Tensor gAux_epi = flat_divide(gAux, args.epi_tile);                          // (EPI_TILE_M,EPI_TILE_N,EPI_M,EPI_N)
     Tensor sAux_epi = make_tensor(make_smem_ptr(smem_aux), SmemLayout{});        // (EPI_TILE_M,EPI_TILE_N,PIPE)
 
     ThrCopy thrblk_g2s = params_ptr->tma_load_aux.get_slice(_0{});
     Tensor bGS_gAux = thrblk_g2s.partition_S(gAux_epi);                                // (TMA,TMA_M,TMA_N,EPI_M,EPI_N)
     Tensor bGS_sAux = thrblk_g2s.partition_D(sAux_epi);                                // (TMA,TMA_M,TMA_N,PIPE)
 
-    return ProducerLoadCallbacks(
+    return ProducerLoadCallbacks<decltype(bGS_gAux), decltype(bGS_sAux)>(
       cute::move(bGS_gAux), cute::move(bGS_sAux), params_ptr);
   }
 
@@ -321,7 +319,7 @@ struct Sm90AuxLoad {
     Params const* params_ptr;
 
     CUTLASS_DEVICE void
-    step_begin(int epi_m, int epi_n, int load_iteration, bool is_producer_load_needed) {
+    previsit(int epi_m, int epi_n, int load_iteration, bool is_producer_load_needed) {
       if constexpr (EnableNullptr) {
         if (params_ptr->use_default) {
           fill(tC_rAux, params_ptr->null_default);
@@ -347,38 +345,29 @@ struct Sm90AuxLoad {
 
   template <
     bool ReferenceSrc, // do register tensors reference the src or dst layout of the tiled copy
-    class ProblemShapeMNKL,
-    class TileShapeMNK,
-    class TileCoordMNKL,
-    class TiledCopy,
-    class SrcTensor
+    class... Args
   >
   CUTLASS_DEVICE auto
-  get_consumer_store_callbacks(
-      ProblemShapeMNKL problem_shape_mnkl,
-      TileShapeMNK tile_shape_mnk,
-      TileCoordMNKL tile_coord_mnkl,
-      EpilogueTile epi_tile,
-      TiledCopy tiled_copy,
-      int thread_idx,
-      SrcTensor const& tCrC) {
+  get_consumer_store_callbacks(ConsumerStoreArgs<Args...> const& args) {
 
-    auto [M, N, K, L] = problem_shape_mnkl;
-    Tensor mAux = params_ptr->tma_load_aux.get_tma_tensor(make_shape(M,N,L));                                // (M,N,L)
-    Tensor tC_gAux = sm90_partition_for_epilogue<ReferenceSrc>(                        // (CPY,CPY_M,CPY_N,EPI_M,EPI_N)
-                      mAux, tile_shape_mnk, tile_coord_mnkl, epi_tile, tiled_copy, thread_idx);
+    auto [M, N, K, L] = args.problem_shape_mnkl;
+
+    Tensor mAux_mn = params_ptr->tma_load_aux.get_tma_tensor(make_shape(M,N,L));                             // (M,N,L)
+    Tensor mAux = coalesce(mAux_mn, take<0,2>(args.tile_shape_mnk));
+    Tensor tC_gAux = sm90_partition_for_epilogue<ReferenceSrc                          // (CPY,CPY_M,CPY_N,EPI_M,EPI_N)
+      >(mAux, args.tile_shape_mnk, args.tile_coord_mnkl, args.epi_tile, args.tiled_copy, args.thread_idx);
     Tensor tC_rAux = make_tensor<Element>(take<0,3>(shape(tC_gAux)));                  // (CPY,CPY_M,CPY_N)
 
     auto tiled_s2r = conditional_return<ReferenceSrc>(
-      make_tiled_copy_S(Copy_Atom<CopyOpS2R,Element>{}, tiled_copy),
-      make_tiled_copy_D(Copy_Atom<CopyOpS2R,Element>{}, tiled_copy)
+      make_tiled_copy_S(Copy_Atom<CopyOpS2R,Element>{}, args.tiled_copy),
+      make_tiled_copy_D(Copy_Atom<CopyOpS2R,Element>{}, args.tiled_copy)
     );
     Tensor sAux_epi = cute::as_position_independent_swizzle_tensor(
                         make_tensor(make_smem_ptr(smem_aux), SmemLayout{}));            // (EPI_TILE_M,EPI_TILE_N,PIPE)
-    auto tSR_sAux = tiled_s2r.get_slice(thread_idx).partition_S(sAux_epi);                    // (S2R,S2R_M,S2R_N,PIPE)
+    auto tSR_sAux = tiled_s2r.get_slice(args.thread_idx).partition_S(sAux_epi);               // (S2R,S2R_M,S2R_N,PIPE)
 
-
-    return ConsumerStoreCallbacks(cute::move(tC_rAux), tiled_s2r, cute::move(tSR_sAux), params_ptr);
+    return ConsumerStoreCallbacks<decltype(tC_rAux), decltype(tiled_s2r), decltype(tSR_sAux)>(
+        cute::move(tC_rAux), tiled_s2r, cute::move(tSR_sAux), params_ptr);
   }
 };
 
@@ -400,7 +389,7 @@ struct Sm90ScalarBroadcast {
   static_assert(
     (cute::is_same_v<StrideMNL, Stride<_0,_0, _0>>) || // scalar broadcast, e.g. alpha
     (cute::is_same_v<StrideMNL, Stride<_0,_0, _1>>) || // batched scalar broadcast, e.g. per-batch alpha
-    (cute::is_same_v<StrideMNL, Stride<_0,_0,int>>)); 
+    (cute::is_same_v<StrideMNL, Stride<_0,_0,int>>));
 
   struct SharedStorage { };
 
@@ -418,6 +407,19 @@ struct Sm90ScalarBroadcast {
     return args;
   }
 
+  template <class ProblemShape>
+  static size_t
+  get_workspace_size(ProblemShape const& problem_shape, Arguments const& args) {
+    return 0;
+  }
+
+  template <class ProblemShape>
+  static cutlass::Status
+  initialize_workspace(ProblemShape const& problem_shape, Arguments const& args, void* workspace, cudaStream_t stream,
+    CudaHostAdapter *cuda_adapter = nullptr) {
+    return cutlass::Status::kSuccess;
+  }
+
   CUTLASS_DEVICE bool
   is_producer_load_needed() const {
     return false;
@@ -428,6 +430,12 @@ struct Sm90ScalarBroadcast {
     return false;
   }
 
+  // This must be called after update_scalar is called
+  CUTLASS_DEVICE bool
+  is_zero() const {
+    return scalar == Element(0);
+  }
+
   CUTLASS_HOST_DEVICE
   Sm90ScalarBroadcast() { }
 
@@ -435,7 +443,7 @@ struct Sm90ScalarBroadcast {
   Sm90ScalarBroadcast(Params const& params, SharedStorage const& shared_storage)
       : params_ptr(&params) {
     // Get the scalar for non-batched broadcast
-    if constexpr (cute::is_same_v<StrideMNL, Stride<_0,_0,_0>>) {
+    if (get<2>(params_ptr->dScalar) == 0) {
       update_scalar();
     }
   }
@@ -443,24 +451,12 @@ struct Sm90ScalarBroadcast {
   Element scalar;
   Params const* params_ptr;
 
-  template <
-    class ProblemShapeMNKL,
-    class TileShapeMNK,
-    class TileCoordMNKL,
-    class EpilogueTile
-  >
+  template <class... Args>
   CUTLASS_DEVICE auto
-  get_producer_load_callbacks(
-      ProblemShapeMNKL problem_shape_mnkl,
-      TileShapeMNK tile_shape_mnk,
-      TileCoordMNKL tile_coord_mnkl,
-      EpilogueTile epi_tile,
-      int thread_idx) {
+  get_producer_load_callbacks(ProducerLoadArgs<Args...> const& args) {
     // Get the scalar for batched broadcast
-    if constexpr (
-      cute::is_same_v<StrideMNL, Stride<_0,_0,_1>> || 
-      cute::is_same_v<StrideMNL, Stride<_0,_0,int>>) {
-      auto [m_coord, n_coord, k_coord, l_coord] = tile_coord_mnkl;
+    if (get<2>(params_ptr->dScalar) != 0) {
+      auto [m_coord, n_coord, k_coord, l_coord] = args.tile_coord_mnkl;
       update_scalar(l_coord);
     }
 
@@ -487,28 +483,14 @@ struct Sm90ScalarBroadcast {
 
   template <
     bool ReferenceSrc, // do register tensors reference the src or dst layout of the tiled copy
-    class ProblemShapeMNKL,
-    class TileShapeMNK,
-    class TileCoordMNKL,
-    class EpilogueTile,
-    class TiledCopy,
-    class SrcTensor
+    class... Args
   >
   CUTLASS_DEVICE auto
-  get_consumer_store_callbacks(
-      ProblemShapeMNKL problem_shape_mnkl,
-      TileShapeMNK tile_shape_mnk,
-      TileCoordMNKL tile_coord_mnkl,
-      EpilogueTile epi_tile,
-      TiledCopy tiled_copy,
-      int thread_idx,
-      SrcTensor const& tCrC) {
+  get_consumer_store_callbacks(ConsumerStoreArgs<Args...> const& args) {
 
     // Get the scalar for batched broadcast
-    if constexpr (
-      cute::is_same_v<StrideMNL, Stride<_0,_0,_1>> || 
-      cute::is_same_v<StrideMNL, Stride<_0,_0,int>>) {
-      auto [m_coord, n_coord, k_coord, l_coord] = tile_coord_mnkl;
+    if (get<2>(params_ptr->dScalar) != 0) {
+      auto [m_coord, n_coord, k_coord, l_coord] = args.tile_coord_mnkl;
       update_scalar(l_coord);
     }
 
@@ -539,9 +521,27 @@ private:
       }
     }
   }
+
+  template<class... Xs>
+  CUTLASS_DEVICE void
+  update_scalar(cute::tuple<Xs...>) {
+    // Only support multiple L-modes with fully-broadcast scalar
+    static_assert(cute::is_same_v<StrideMNL, Stride<_0,_0, _0>>);
+    scalar = params_ptr->scalars[0];
+  }
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
+
+namespace detail {
+
+template <int StagesC, class CtaTileShapeMNK, class EpilogueTile>
+constexpr int
+compute_row_broadcast_stages() {
+  return ceil_div(StagesC, size<1>(zipped_divide(make_layout(take<0,2>(CtaTileShapeMNK{})), EpilogueTile{}))) + 1;
+}
+
+}
 
 // Row vector broadcast
 template<
@@ -579,6 +579,19 @@ struct Sm90RowBroadcast {
     return args;
   }
 
+  template <class ProblemShape>
+  static size_t
+  get_workspace_size(ProblemShape const& problem_shape, Arguments const& args) {
+    return 0;
+  }
+
+  template <class ProblemShape>
+  static cutlass::Status
+  initialize_workspace(ProblemShape const& problem_shape, Arguments const& args, void* workspace, cudaStream_t stream,
+    CudaHostAdapter* cuda_adapter = nullptr) {
+    return cutlass::Status::kSuccess;
+  }
+
   CUTLASS_HOST_DEVICE
   Sm90RowBroadcast() { }
 
@@ -598,6 +611,11 @@ struct Sm90RowBroadcast {
   CUTLASS_DEVICE bool
   is_C_load_needed() const {
     return false;
+  }
+
+  CUTLASS_DEVICE bool
+  is_zero() const {
+    return (params.ptr_row == nullptr && params.null_default == Element(0));
   }
 
   template <int EpiTiles, class GTensor, class STensor>
@@ -622,7 +640,7 @@ struct Sm90RowBroadcast {
 
       if (issue_tma_load) {
         // Increment the expect-tx count of the first subtile's mbarrier by the row vector's byte-size
-        constexpr uint32_t copy_bytes = size<1>(CtaTileShapeMNK{}) * sizeof_bytes_v<Element>;
+        constexpr uint32_t copy_bytes = size<1>(CtaTileShapeMNK{}) * sizeof_bits_v<Element> / 8;
         cutlass::arch::ClusterTransactionBarrier::expect_transaction(full_mbarrier_ptr, copy_bytes);
         // Issue the TMA bulk copy
         auto bulk_copy = Copy_Atom<SM90_BULK_COPY_AUTO, Element>{}.with(*full_mbarrier_ptr);
@@ -633,29 +651,19 @@ struct Sm90RowBroadcast {
     }
   };
 
-  template <
-    class ProblemShapeMNKL,
-    class TileShapeMNK,
-    class TileCoordMNKL,
-    class EpilogueTile
-  >
+  template <class... Args>
   CUTLASS_DEVICE auto
-  get_producer_load_callbacks(
-      ProblemShapeMNKL problem_shape_mnkl,
-      TileShapeMNK tile_shape_mnk,
-      TileCoordMNKL tile_coord_mnkl,
-      EpilogueTile epi_tile,
-      int thread_idx) {
+  get_producer_load_callbacks(ProducerLoadArgs<Args...> const& args) {
 
-    auto [M, N, K, L] = problem_shape_mnkl;
-    auto [m, n, k, l] = tile_coord_mnkl;
+    auto [M, N, K, L] = args.problem_shape_mnkl;
+    auto [m, n, k, l] = args.tile_coord_mnkl;
     Tensor mRow = make_tensor(make_gmem_ptr(params.ptr_row), make_shape(M,N,L), params.dRow);
-    Tensor gRow = local_tile(mRow, take<0,2>(tile_shape_mnk), make_coord(m,n,l));                      // (CTA_M,CTA_N)
+    Tensor gRow = local_tile(mRow, take<0,2>(args.tile_shape_mnk), make_coord(m,n,l));            // (CTA_M,CTA_N)
     Tensor sRow = make_tensor(make_smem_ptr(smem_row),                                            // (CTA_M,CTA_N,PIPE)
                     make_shape(size<0>(CtaTileShapeMNK{}), size<1>(CtaTileShapeMNK{}), Stages),
                     make_stride(_0{},_1{},size<1>(CtaTileShapeMNK{})));
 
-    constexpr int EpiTiles = size(shape_div(take<0,2>(tile_shape_mnk), epi_tile));
+    constexpr int EpiTiles = decltype(size<1>(zipped_divide(make_layout(take<0,2>(args.tile_shape_mnk)), args.epi_tile)))::value;
     return ProducerLoadCallbacks<EpiTiles, decltype(gRow), decltype(sRow)>(
       cute::move(gRow), cute::move(sRow), params);
   }
@@ -673,7 +681,7 @@ struct Sm90RowBroadcast {
     Params const& params;
 
     CUTLASS_DEVICE void
-    step_begin(int epi_m, int epi_n, int load_iteration, bool is_producer_load_needed) {
+    previsit(int epi_m, int epi_n, int load_iteration, bool is_producer_load_needed) {
       if constexpr (EnableNullptr) {
         if (params.ptr_row == nullptr) {
           fill(tCrRow, params.null_default);
@@ -683,8 +691,9 @@ struct Sm90RowBroadcast {
 
       if (epi_m == 0) { // Assumes M-major subtile loop
         // Filter so we don't issue redundant copies over stride-0 modes
+        // (only works if 0-strides are in same location, which is by construction)
         int bcast_pipe_index = (load_iteration / EpiTiles) % Stages;
-        copy(filter(tCsRow(_,_,_,epi_m,epi_n,bcast_pipe_index)), filter(tCrRow));
+        copy_aligned(filter(tCsRow(_,_,_,epi_m,epi_n,bcast_pipe_index)), filter(tCrRow));
       }
     }
 
@@ -704,31 +713,19 @@ struct Sm90RowBroadcast {
 
   template <
     bool ReferenceSrc, // do register tensors reference the src or dst layout of the tiled copy
-    class ProblemShapeMNKL,
-    class TileShapeMNK,
-    class TileCoordMNKL,
-    class EpilogueTile,
-    class TiledCopy,
-    class SrcTensor
+    class... Args
   >
   CUTLASS_DEVICE auto
-  get_consumer_store_callbacks(
-      ProblemShapeMNKL problem_shape_mnkl,
-      TileShapeMNK tile_shape_mnk,
-      TileCoordMNKL tile_coord_mnkl,
-      EpilogueTile epi_tile,
-      TiledCopy tiled_copy,
-      int thread_idx,
-      SrcTensor const& tCrC) {
+  get_consumer_store_callbacks(ConsumerStoreArgs<Args...> const& args) {
 
     Tensor sRow = make_tensor(make_smem_ptr(smem_row),                                            // (CTA_M,CTA_N,PIPE)
                     make_shape(size<0>(CtaTileShapeMNK{}), size<1>(CtaTileShapeMNK{}), Stages),
                     make_stride(_0{},_1{},size<1>(CtaTileShapeMNK{})));
     Tensor tCsRow = sm90_partition_for_epilogue<ReferenceSrc>(                    // (CPY,CPY_M,CPY_N,EPI_M,EPI_N,PIPE)
-                      sRow, epi_tile, tiled_copy, thread_idx);
+                      sRow, args.epi_tile, args.tiled_copy, args.thread_idx);
     Tensor tCrRow = make_tensor_like(take<0,3>(tCsRow));                                           // (CPY,CPY_M,CPY_N)
 
-    constexpr int EpiTiles = size(shape_div(take<0,2>(tile_shape_mnk), epi_tile));
+    constexpr int EpiTiles = decltype(size<1>(zipped_divide(make_layout(take<0,2>(args.tile_shape_mnk)), args.epi_tile)))::value;
     return ConsumerStoreCallbacks<EpiTiles, decltype(tCrRow), decltype(tCsRow)>(
       cute::move(tCrRow), cute::move(tCsRow), params);
   }
@@ -769,6 +766,19 @@ struct Sm90ColBroadcast {
     return args;
   }
 
+  template <class ProblemShape>
+  static size_t
+  get_workspace_size(ProblemShape const& problem_shape, Arguments const& args) {
+    return 0;
+  }
+
+  template <class ProblemShape>
+  static cutlass::Status
+  initialize_workspace(ProblemShape const& problem_shape, Arguments const& args, void* workspace, cudaStream_t stream,
+    CudaHostAdapter* cuda_adapter = nullptr) {
+    return cutlass::Status::kSuccess;
+  }
+
   CUTLASS_DEVICE bool
   is_producer_load_needed() const {
     return false;
@@ -777,6 +787,11 @@ struct Sm90ColBroadcast {
   CUTLASS_DEVICE bool
   is_C_load_needed() const {
     return false;
+  }
+
+  CUTLASS_DEVICE bool
+  is_zero() const {
+    return (params.ptr_col == nullptr && params.null_default == Element(0));
   }
 
   CUTLASS_HOST_DEVICE
@@ -788,19 +803,9 @@ struct Sm90ColBroadcast {
 
   Params params;
 
-  template <
-    class ProblemShapeMNKL,
-    class TileShapeMNK,
-    class TileCoordMNKL,
-    class EpilogueTile
-  >
+  template <class... Args>
   CUTLASS_DEVICE auto
-  get_producer_load_callbacks(
-      ProblemShapeMNKL problem_shape_mnkl,
-      TileShapeMNK tile_shape_mnk,
-      TileCoordMNKL tile_coord_mnkl,
-      EpilogueTile epi_tile,
-      int thread_idx) {
+  get_producer_load_callbacks(ProducerLoadArgs<Args...> const& args) {
     return EmptyProducerLoadCallbacks{};
   }
 
@@ -826,7 +831,8 @@ struct Sm90ColBroadcast {
       }
 
       // Filter so we don't issue redundant copies over stride-0 modes
-      copy(filter(tCgCol), filter(tCrCol));
+      // (only works if 0-strides are in same location, which is by construction)
+      copy_aligned(filter(tCgCol), filter(tCrCol));
     }
 
     template <typename ElementAccumulator, int FragmentSize>
@@ -847,27 +853,15 @@ struct Sm90ColBroadcast {
 
   template <
     bool ReferenceSrc, // do register tensors reference the src or dst layout of the tiled copy
-    class ProblemShapeMNKL,
-    class TileShapeMNK,
-    class TileCoordMNKL,
-    class EpilogueTile,
-    class TiledCopy,
-    class SrcTensor
+    class... Args
   >
   CUTLASS_DEVICE auto
-  get_consumer_store_callbacks(
-      ProblemShapeMNKL problem_shape_mnkl,
-      TileShapeMNK tile_shape_mnk,
-      TileCoordMNKL tile_coord_mnkl,
-      EpilogueTile epi_tile,
-      TiledCopy tiled_copy,
-      int thread_idx,
-      SrcTensor const& tCrC) {
+  get_consumer_store_callbacks(ConsumerStoreArgs<Args...> const& args) {
 
-    auto [M, N, K, L] = problem_shape_mnkl;
+    auto [M, N, K, L] = args.problem_shape_mnkl;
     Tensor mCol = make_tensor(make_gmem_ptr(params.ptr_col), make_shape(M,N,L), params.dCol);
     Tensor tCgCol = sm90_partition_for_epilogue<ReferenceSrc>(                         // (CPY,CPY_M,CPY_N,EPI_M,EPI_N)
-                      mCol, tile_shape_mnk, tile_coord_mnkl, epi_tile, tiled_copy, thread_idx);
+      mCol, args.tile_shape_mnk, args.tile_coord_mnkl, args.epi_tile, args.tiled_copy, args.thread_idx);
     Tensor tCrCol = make_tensor_like(tCgCol);                                          // (CPY,CPY_M,CPY_N,EPI_M,EPI_N)
 
     return ConsumerStoreCallbacks<decltype(tCgCol), decltype(tCrCol)>(

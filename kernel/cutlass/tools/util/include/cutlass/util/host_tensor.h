@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -112,9 +112,13 @@ public:
   /// Example
   ///  int2:  kBitsStoredVec = 8; kElementsPerStoredVec = 4; kNumStoragePerStoredVec = 1 uint8_t;
   ///  int4:  kBitsStoredVec = 8; kElementsPerStoredVec = 2; kNumStoragePerStoredVec = 1 uint8_t;
-  static int const kBitsStoredVec        = (sizeof_bits<Element>::value < 8) ? cutlass::lcm(sizeof_bits<Element>::value, 8) : sizeof_bits<Element>::value; 
-  static int const kElementsPerStoredVec = kBitsStoredVec / sizeof_bits<Element>::value;
-  static int const kNumStoragePerStoredVec = kBitsStoredVec / (sizeof(Element) * 8);
+  static constexpr int kBitsStoredVec        = (sizeof_bits<Element>::value < 8) ? cutlass::lcm(sizeof_bits<Element>::value, 8) : sizeof_bits<Element>::value; 
+  static constexpr int kElementsPerStoredVec = kBitsStoredVec / sizeof_bits<Element>::value;
+  static constexpr int kNumStoragePerStoredVec = kBitsStoredVec / (sizeof(Element) * 8);
+
+  static_assert(kBitsStoredVec != 0, "kBitsStoredVec can not be zero");
+  static_assert(kElementsPerStoredVec != 0, "kElementsPerStoredVec can not be zero");
+  static_assert(kNumStoragePerStoredVec != 0, "kNumStoragePerStoredVec can not be zero");
 
  private:
 
@@ -129,7 +133,8 @@ public:
   Layout layout_;
 
   /// Host-side memory allocation
-  std::vector<Element> host_;
+  /// avoid the std::vector<bool> specialization
+  std::vector<std::conditional_t<std::is_same_v<Element,bool>, uint8_t, Element>> host_;
 
   /// Device-side memory
   device_memory::allocation<Element> device_;
@@ -180,7 +185,7 @@ public:
     device_.reset();
     host_.clear();
 
-    count = count / kElementsPerStoredVec * kNumStoragePerStoredVec;
+    count = (count + kElementsPerStoredVec - 1) / kElementsPerStoredVec * kNumStoragePerStoredVec;
     host_.resize(count);
 
     // Allocate memory
@@ -250,10 +255,10 @@ public:
   }
 
   /// Gets pointer to host data
-  Element * host_data() { return host_.data(); }
+  Element * host_data() { return reinterpret_cast<Element *>(host_.data()); }
 
   /// Gets pointer to host data with a pointer offset
-  Element * host_data_ptr_offset(LongIndex ptr_element_offset) { return &ReferenceFactory<Element>::get(host_.data(), ptr_element_offset); }
+  Element * host_data_ptr_offset(LongIndex ptr_element_offset) { return &ReferenceFactory<Element>::get(host_data(), ptr_element_offset); }
 
   /// Gets a reference to an element in host memory
   Reference host_data(LongIndex idx) {
@@ -261,10 +266,10 @@ public:
   }
 
   /// Gets pointer to host data
-  Element const * host_data() const { return host_.data(); }
+  Element const * host_data() const { return reinterpret_cast<Element const *>(host_.data()); }
 
   /// Gets pointer to host data with a pointer offset
-  Element const * host_data_ptr_offset(LongIndex ptr_element_offset) const { return &ReferenceFactory<Element>::get(host_.data(), ptr_element_offset); }
+  Element const * host_data_ptr_offset(LongIndex ptr_element_offset) const { return &ReferenceFactory<Element>::get(host_data(), ptr_element_offset); }
 
   /// Gets a constant reference to an element in host memory
   ConstReference host_data(LongIndex idx) const {

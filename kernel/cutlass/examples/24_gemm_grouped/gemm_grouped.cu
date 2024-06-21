@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -789,7 +789,7 @@ public:
       problem_count_check += bin.second.size();
     }
 
-    if (problem_count_check != this->problem_count()) {
+    if (problem_count_check != size_t(this->problem_count())) {
       std::cout << "\n***\nERROR in BINNING LOGIC!\n***\n" << std::endl;
     }
 

@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -39,7 +39,7 @@
 #include "cutlass/epilogue/collective/detail.hpp"
 
 #include "cute/tensor.hpp"
-#include "cute/numeric/int.hpp"
+#include "cute/numeric/numeric_types.hpp"
 
 #include "gather_tensor.hpp"
 
@@ -86,8 +86,8 @@ public:
   static const int kOutputAlignment = ThreadEpilogueOp::kCount;
   using AlignmentType = typename cute::uint_bit<sizeof_bits<ElementOutput>::value * kOutputAlignment>::type;
 
-  static_assert(rank(StrideC{}) == 3, "StrideCD must be rank-3: [M, N, L]");
-  static_assert(rank(StrideD{}) == 3, "StrideCD must be rank-3: [M, N, L]");
+  static_assert(cute::rank(StrideC{}) == 3, "StrideCD must be rank-3: [M, N, L]");
+  static_assert(cute::rank(StrideD{}) == 3, "StrideCD must be rank-3: [M, N, L]");
 
   struct SharedStorage { };
 
@@ -151,10 +151,10 @@ public:
     using namespace cute;
     using X = Underscore;
 
-    static_assert(rank(ProblemShapeMNKL{}) == 4, "ProblemShapeMNKL must be rank 4");
+    static_assert(cute::rank(ProblemShapeMNKL{}) == 4, "ProblemShapeMNKL must be rank 4");
     static_assert(is_static<BlockShapeMNK>::value, "ThreadBlock tile shape must be static");
-    static_assert(rank(BlockShapeMNK{}) == 3, "BlockShapeMNK must be rank 3");
-    static_assert(rank(BlockCoordMNKL{}) == 4, "BlockCoordMNKL must be rank 3");
+    static_assert(cute::rank(BlockShapeMNK{}) == 3, "BlockShapeMNK must be rank 3");
+    static_assert(cute::rank(BlockCoordMNKL{}) == 4, "BlockCoordMNKL must be rank 3");
 
     (void) smem_buf;
     ThreadEpilogueOp epilogue_op{params.thread_params};

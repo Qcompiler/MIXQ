@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -51,13 +51,12 @@ struct ArrayPlanarComplex {
   using Element = Element_;
 
   /// Number of logical elements
-  static size_t const kElements = N;
+  static constexpr size_t kElements = N;
 
   /// Underlying Fragment of real-valued elemenets
-  using ArrayReal = Array<Element, N>;
+  using ArrayReal = cutlass::Array<Element, N>;
 
 public:
-
   /// Fragment of real-valued elements representing the real part
   ArrayReal real;
 
@@ -65,19 +64,6 @@ public:
   ArrayReal imag;
 
 public:
-
-  /// Ctor
-  CUTLASS_HOST_DEVICE
-  ArrayPlanarComplex() { }
-
-  /// Ctor
-  CUTLASS_HOST_DEVICE
-  ArrayPlanarComplex(
-    ArrayReal const &real_,
-    ArrayReal const &imag_
-  ):
-    real(real_), imag(imag_) { }
-
   /// Sets the array to zero efficiently
   CUTLASS_HOST_DEVICE
   void clear() {
@@ -93,7 +79,7 @@ template <typename Element, int N>
 CUTLASS_HOST_DEVICE
 ArrayPlanarComplex<Element, N> 
 make_ArrayPlanarComplex(Array<Element, N> const &real, Array<Element, N> const &imag) {
-  return ArrayPlanarComplex<Element, N>(real, imag);
+  return ArrayPlanarComplex<Element, N>{real, imag};
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////

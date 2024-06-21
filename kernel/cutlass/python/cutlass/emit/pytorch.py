@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -39,7 +39,7 @@ Example usage with JIT compilation:
 .. highlight:: python
 .. code-block:: python
 
-    plan = cutlass.op.Gemm(element=torch.float32, layout=cutlass.LayoutType.RowMajor)
+    plan = cutlass.op.Gemm(element=torch.float32, layout=cutlass_library.LayoutType.RowMajor)
     op = plan.construct()
     mod = cutlass.emit.pytorch(op, 'cutlass_gemm', 80, jit=True)
 
@@ -81,15 +81,16 @@ The module can later be used in Python via:
 import logging
 import os
 
-from cutlass import CUTLASS_PATH, logger, swizzle, ConvKind, ConvKindNames, DataType
+from cutlass_library import ConvKind, ConvKindNames, DataType, SubstituteTemplate
+
+from cutlass import CUTLASS_PATH, logger, swizzle
 from cutlass.backend.gemm_operation import GemmOperationGrouped, GemmOperationUniversal
 from cutlass.backend.conv2d_operation import Conv2dOperation
 from cutlass.backend.library import ApiVersion
-from cutlass.backend.utils.software import CheckPackages, SubstituteTemplate
 from cutlass.emit import common
+from cutlass.utils.datatypes import is_torch_available
 
-torch_available = CheckPackages().check_torch()
-if torch_available:
+if is_torch_available():
     import torch
 
 
@@ -231,7 +232,7 @@ _PYTORCH_GEMM_INCLUDES = {
 #include "cutlass/gemm/collective/collective_builder.hpp"
 #include "cutlass/gemm/device/gemm_universal_adapter.h"
 #include "cutlass/gemm/kernel/gemm_universal.hpp"
-#include "cutlass/epilogue/collective/default_epilogue.hpp"
+#include "cutlass/epilogue/collective/collective_builder.hpp"
 #include "cutlass/util/packed_stride.hpp"
 """,
 }
@@ -582,7 +583,11 @@ setup(
             '${name}_kernel.cu',
         ],
         include_dirs=['${cutlass_path}/include', '${cutlass_path}/tools/util/include'],
-        extra_compile_args=['-std=c++17']
+        extra_compile_args={
+            'cxx': ['-std=c++17'],
+            'nvcc': ['-std=c++17', ${extra_compile_args}],
+        },
+        libraries=['cuda']
         ),
     ],
     cmdclass={
@@ -592,7 +597,7 @@ setup(
 """
 
 
-def _generate_setup(name: str, sourcedir: str):
+def _generate_setup(name: str, sourcedir: str, extra_compile_args: str=""):
     """
     Generates a setup.py file for the extension
 
@@ -600,10 +605,12 @@ def _generate_setup(name: str, sourcedir: str):
     :type name: str
     :param sourcedir: directory to which generated source files should be written
     :type sourcedir: str
+    :param extra_compile_args: additional arguments to pass to setup.py
+    :type extra_args: str
     """
     setup_py_file = os.path.join(sourcedir, "setup.py")
     setup_source = SubstituteTemplate(
-        _PYTORCH_SETUP_PY, {"name": name, "cutlass_path": CUTLASS_PATH}
+        _PYTORCH_SETUP_PY, {"name": name, "cutlass_path": CUTLASS_PATH, "extra_compile_args": extra_compile_args}
     )
     with open(setup_py_file, "w") as outfile:
         outfile.write(setup_source)
@@ -656,7 +663,10 @@ class _ArchListSetter:
         """
         Restores the old value of TORCH_CUDA_ARCH_LIST
         """
-        os.environ[_ArchListSetter._TORCH_CUDA_ARCH_LIST] = self.old_arch_list
+        if self.old_arch_list is None:
+            del os.environ[_ArchListSetter._TORCH_CUDA_ARCH_LIST]
+        else:
+            os.environ[_ArchListSetter._TORCH_CUDA_ARCH_LIST] = self.old_arch_list
 
 
 def _jit(name: str, cc: int, cpp_file: str, cuda_file: str):
@@ -692,6 +702,7 @@ def _jit(name: str, cc: int, cpp_file: str, cuda_file: str):
                 os.path.join(CUTLASS_PATH, "include"),
                 os.path.join(CUTLASS_PATH, "tools/util/include"),
             ],
+            extra_ldflags=["-lcuda"],
             verbose=(logger.level == logging.DEBUG)
         )
     return jitmodule
@@ -755,7 +766,10 @@ def _pytorch_gemm(op, name: str, cc: int, jit: bool = False, sourcedir: str = ""
     with open(cpp_file, "w") as outfile:
         outfile.write(cpp_source)
 
-    _generate_setup(name, sourcedir)
+    extra_compile_args = ""
+    if cc == 90:
+        extra_compile_args = "'--generate-code=arch=compute_90a,code=[sm_90a]'"
+    _generate_setup(name, sourcedir, extra_compile_args)
 
     if jit:
         return _jit(name, cc, cpp_file, cuda_file)

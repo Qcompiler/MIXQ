@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -38,10 +38,10 @@ The layout Nodes change the layout of intermediate nodes in epilogue visitor gra
 
 from copy import deepcopy
 
+from cutlass_library import LayoutType
 from pycute import product, flatten
 
 import cutlass
-from cutlass import LayoutType
 from cutlass.backend.evt.ir.layout_algorithm import _list_to_tuple, _tuple_to_list
 from cutlass.backend.evt.ir.node import NodeBase
 from cutlass.backend.evt.ir.tensor import Tensor

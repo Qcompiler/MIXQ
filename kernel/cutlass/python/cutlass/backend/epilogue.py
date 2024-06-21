@@ -1,6 +1,6 @@
-################################################################################
+#################################################################################################
 #
-# Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved
+# Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -28,18 +28,19 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
-################################################################################
+#################################################################################################
 
 import ctypes
 
+from cutlass_library import SubstituteTemplate
 import numpy as np
 from scipy.special import erf
 
-from cutlass import DataType, DataTypeTag
+from cutlass_library import DataType, DataTypeTag
 from cutlass.backend.c_types import MatrixCoord_
 from cutlass.backend.frontend import NumpyFrontend
 from cutlass.backend.library import ActivationOp, ActivationOpTag
-from cutlass.backend.utils.software import CheckPackages, SubstituteTemplate
+from cutlass.utils.datatypes import is_numpy_tensor, is_torch_available, is_torch_tensor
 
 dtype2ctype = {
     DataType.f16: ctypes.c_uint16,
@@ -49,8 +50,7 @@ dtype2ctype = {
     DataType.s32: ctypes.c_int32
 }
 
-torch_available = CheckPackages().check_torch()
-if torch_available:
+if is_torch_available():
     import torch
     import torch.nn.functional as F
 
@@ -59,11 +59,11 @@ def get_scalar(value):
     """
     Returns a scalar value from a container (e.g., np.ndarray)
     """
-    if isinstance(value, np.ndarray):
+    if is_numpy_tensor(value):
         if value.size != 1:
             raise Exception("Scalars used in epilogue must be of size 1")
         return value.reshape(-1)[0]
-    elif CheckPackages().check_torch() and isinstance(value, torch.Tensor):
+    elif is_torch_tensor(value):
         if value.size != 1:
             raise Exception("Scalars used in epilogue must be of size 1")
         return value.reshape(-1)[0]
@@ -122,7 +122,7 @@ class LinearCombination(EpilogueFunctorBase):
     :param element_output: data type used to load and store tensors
 
     :param epilogue_vector_length: number of elements computed per operation.
-    Usually it is 128/sizeof_bits<ElementOutput_>, but we use 64 and 32 sometimes
+    Usually it is 128/sizeof_bits_v<ElementOutput_>, but we use 64 and 32 sometimes
     when there are not enough data to store
 
     :param element_accumulator: Accumulator data type
@@ -157,19 +157,41 @@ class LinearCombination(EpilogueFunctorBase):
         c_element_epilogue = dtype2ctype[self.element_epilogue]
         element_epilogue = self.element_epilogue
 
-        class _EpilogueOutputOpParams(ctypes.Structure):
+        class _EpilogueOutputOpParamsEVT(ctypes.Structure):
+            """
+            Epilogue params when using the default linear combination of EVT, which
+            does not currently use {alpha,beta}_ptr_array
+            """
             _fields_ = [
                 ("alpha", c_element_epilogue),
                 ("beta", c_element_epilogue),
                 ("alpha_ptr", ctypes.c_void_p),
-                ("beta_ptr", ctypes.c_void_p)
+                ("beta_ptr", ctypes.c_void_p),
             ]
 
             def __init__(self, alpha, beta, *args) -> None:
                 self.alpha = to_ctype_value(alpha, element_epilogue)
                 self.beta = to_ctype_value(beta, element_epilogue)
 
+        class _EpilogueOutputOpParams(ctypes.Structure):
+            _fields_ = [
+                ("alpha", c_element_epilogue),
+                ("beta", c_element_epilogue),
+                ("alpha_ptr", ctypes.c_void_p),
+                ("beta_ptr", ctypes.c_void_p),
+                ("alpha_ptr_array", ctypes.c_void_p),
+                ("beta_ptr_array", ctypes.c_void_p),
+            ]
+
+            def __init__(self, alpha, beta, *args) -> None:
+                self.alpha = to_ctype_value(alpha, element_epilogue)
+                self.beta = to_ctype_value(beta, element_epilogue)
+
+            def to_evt_params(self) -> _EpilogueOutputOpParamsEVT:
+                return _EpilogueOutputOpParamsEVT(self.alpha, self.beta)
+
         self.epilogue_type = _EpilogueOutputOpParams
+        self.epilogue_type_evt = _EpilogueOutputOpParamsEVT
 
     def emit(self):
         return super().emit(self.tag, self.template_arguments)
@@ -185,7 +207,7 @@ class LinearCombinationClamp(LinearCombination):
     :param element_output: data type used to load and store tensors
 
     :param epilogue_vector_length: number of elements computed per operation.
-    Usually it is 128/sizeof_bits<ElementOutput_>, but we use 64 and 32 sometimes
+    Usually it is 128/sizeof_bits_v<ElementOutput_>, but we use 64 and 32 sometimes
     when there are not enough data to store
 
     :param element_accumulator: Accumulator data type
@@ -238,7 +260,7 @@ class FastLinearCombinationClamp(EpilogueFunctorBase):
     :param element_output: data type used to load and store tensors
 
     :param epilogue_vector_length: number of elements computed per operation.
-    Usually it is 128/sizeof_bits<ElementOutput_>, but we use 64 and 32 sometimes
+    Usually it is 128/sizeof_bits_v<ElementOutput_>, but we use 64 and 32 sometimes
     when there are not enough data to store
     """
 
@@ -288,7 +310,7 @@ class LinearCombinationGeneric(LinearCombination):
     :param element_output: data type used to load and store tensors
 
     :param epilogue_vector_length: number of elements computed per operation.
-    Usually it is 128/sizeof_bits<ElementOutput_>, but we use 64 and 32 sometimes
+    Usually it is 128/sizeof_bits_v<ElementOutput_>, but we use 64 and 32 sometimes
     when there are not enough data to store
 
     :param element_accumulator: Accumulator data type
@@ -353,9 +375,9 @@ class ActivationFunctor:
 class ActivationMeta(type):
     @classmethod
     def __call__(cls, x, *args):
-        if isinstance(x, np.ndarray):
+        if is_numpy_tensor(x):
             return cls.numpy(x, *args)
-        elif torch_available and isinstance(x, torch.Tensor):
+        elif is_torch_tensor(x):
             return cls.torch(x, *args)
         else:
             raise NotImplementedError("Unsupported tensor type")

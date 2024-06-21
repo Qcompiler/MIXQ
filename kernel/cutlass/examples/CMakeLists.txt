@@ -1,5 +1,5 @@
 
-# Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -44,7 +44,7 @@ function(cutlass_example_add_executable NAME)
     set(__DISABLE_TESTS OFF)
   endif()
 
-  cutlass_add_executable(${NAME} ${__UNPARSED_ARGUMENTS})
+  cutlass_add_executable(${NAME} ${__UNPARSED_ARGUMENTS} BATCH_SOURCES OFF)
 
   add_dependencies(cutlass_examples ${NAME})
 
@@ -135,6 +135,11 @@ foreach(EXAMPLE
   52_hopper_gather_scatter_fusion
   53_hopper_gemm_permute
   54_hopper_fp8_warp_specialized_gemm
+  55_hopper_mixed_dtype_gemm
+  56_hopper_ptr_array_batched_gemm
+  57_hopper_grouped_gemm
+  58_ada_fp8_gemm
+  59_ampere_gather_scatter_conv
   )
 
   add_subdirectory(${EXAMPLE})

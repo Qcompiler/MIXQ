@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -116,12 +116,15 @@
 
 from math import prod
 
-import cutlass
-from cutlass import (
-    epilogue,
-    swizzle,
+from cuda import cuda
+from cutlass_library import (
+    DataType,
+    DataTypeSize,
     GemmUniversalMode,
 )
+
+import cutlass
+from cutlass import epilogue, swizzle
 from cutlass.backend import compiler
 from cutlass.backend.evt import EpilogueFunctorVisitor
 from cutlass.backend.gemm_operation import GemmArguments, GemmOperationUniversal
@@ -200,14 +203,14 @@ class Gemm(OperationBase):
     :type element_C: cutlass.DataType
     :param element_D: data type to be used for operand D
     :type element_D: cutlass.DataType
-    :type layout_A: layout of operand A
-    :param layout_A: cutlass.LayoutType
-    :type layout_B: layout of operand B
-    :param layout_B: cutlass.LayoutType
-    :type layout_C: layout of operand C
-    :param layout_C: cutlass.LayoutType
-    :type layout_D: layout of operand D
-    :param layout_D: cutlass.LayoutType
+    :param layout_A: layout of operand A
+    :type layout_A: cutlass.LayoutType
+    :param layout_B: layout of operand B
+    :type layout_B: cutlass.LayoutType
+    :param layout_C: layout of operand C
+    :type layout_C: cutlass.LayoutType
+    :param layout_D: layout of operand D
+    :type layout_D: cutlass.LayoutType
     """
 
     def __init__(
@@ -279,20 +282,26 @@ class Gemm(OperationBase):
         # Set the default op class
         datatype_comb = (self._element_a, self._element_b, self._element_accumulator)
         layout_comb = (self._layout_a, self._layout_b)
+
         self.possible_op_classes = self.options.supporting_opclasses(
             self._element_a, self._element_b, self._element_accumulator,
-            self._layout_a, self._layout_b)
+            self._layout_a, self._layout_b, self._math_operation)
 
         if cutlass.OpcodeClass.TensorOp in self.possible_op_classes:
             self.opclass = cutlass.OpcodeClass.TensorOp
         elif cutlass.OpcodeClass.Simt in self.possible_op_classes:
             self.opclass = cutlass.OpcodeClass.Simt
         else:
+            if self._math_operation is not None:
+                math_op_str = f' and math operation {self._math_operation}'
+            else:
+                math_op_str = ''
+
             raise Exception(f'No kernel configuration found for supported data type and layout '
-                            f'combination {datatype_comb}x{layout_comb}')
+                            f'combination {datatype_comb}x{layout_comb}{math_op_str}')
 
         if reset_epilogue:
-            self._reset_epilogue_functor_activation(epilogue.identity)
+            self._reset_epilogue_functor_activation(cutlass.epilogue.identity)
 
     @property
     def swizzling_functor(self):
@@ -308,7 +317,7 @@ class Gemm(OperationBase):
         """
         Sets the swizzling functor to the type specified by `swizzling_functor`
         """
-        if swizzling_functor == swizzle.ThreadblockSwizzleStreamK:
+        if swizzling_functor == cutlass.swizzle.ThreadblockSwizzleStreamK:
             if self.op_class == cutlass.OpcodeClass.Simt:
                 raise Exception('ThreadblockSwizzleStreamK is currently only supported with opcode class TensorOp')
 
@@ -347,8 +356,7 @@ class Gemm(OperationBase):
             return
         if isinstance(td, dict):
             if self._tile_description is None:
-                alignment = list(self.possible_operations.kernels_by_alignment.keys())[0]
-                op = self.possible_operations.operations(alignment)[0]
+                op = self.possible_operations.default_operation(self._math_operation)
                 self._tile_description = datatypes.td_from_profiler_op(op)
             td = self._tile_description.clone_and_update(td)
 
@@ -393,7 +401,10 @@ class Gemm(OperationBase):
         :returns: list of valid tile descriptions for the operations
         :rtype: list
         """
-        return [datatypes.td_from_profiler_op(op) for op in self.possible_operations.all_operations]
+        tds = [datatypes.td_from_profiler_op(op) for op in self.possible_operations.all_operations]
+        if self._math_operation is not None:
+            tds = [td for td in tds if td.math_instruction.math_operation == self._math_operation]
+        return tds
 
     def construct(
         self, tile_description: TileDescription = None,
@@ -414,23 +425,27 @@ class Gemm(OperationBase):
         :return: operation that was constructed
         :rtype: cutlass.backend.GemmOperationUniversal
         """
-        alignment_pref_A = min(128 // cutlass.DataTypeSize[self._element_a], max(self.possible_operations.alignments))
-        alignment_pref_B = min(128 // cutlass.DataTypeSize[self._element_b], max(self.possible_operations.alignments))
-        alignment_pref_C = min(128 // cutlass.DataTypeSize[self._element_c], max(self.possible_operations.alignments))
+        alignment_pref_A = min(128 // DataTypeSize[self._element_a], max(self.possible_operations.alignments("A")))
+        alignment_pref_B = min(128 // DataTypeSize[self._element_b], max(self.possible_operations.alignments("B")))
         alignment_A = check.alignment_or_default(alignment_A, alignment_pref_A)
         alignment_B = check.alignment_or_default(alignment_B, alignment_pref_B)
-        alignment_C = check.alignment_or_default(alignment_C, alignment_pref_C)
-
-        self.epilogue_functor = self._reset_epilogue_functor_alignment(alignment_C, self.epilogue_functor)
 
         tensor_A = TensorDescription(self._element_a, self._layout_a, alignment_A)
         tensor_B = TensorDescription(self._element_b, self._layout_b, alignment_B)
-        tensor_C = TensorDescription(self._element_c, self._layout_c, alignment_C)
+
+        if alignment_C is None:
+            alignment_C = max(self.possible_operations.alignments("C"))
+            if self._element_c != DataType.void:
+                alignment_C = min(128 // DataTypeSize[self._element_c], alignment_C)
 
         if tile_description is None:
             if self._tile_description is None:
-                op = self.possible_operations.operations(alignment_A)[0]
+                op = self.possible_operations.operations(alignment_A, alignment_B, alignment_C, self._math_operation)[0]
                 tile_description = datatypes.td_from_profiler_op(op)
+
+                # The selected op may have lower alignment than that determined above, so we must
+                # reset alignment here.
+                alignment_C = op.C.alignment
             else:
                 tile_description = self._tile_description
         else:
@@ -438,6 +453,9 @@ class Gemm(OperationBase):
             if not valid:
                 raise Exception(f"Invalid tile description. {err_str}")
             self._tile_description = tile_description
+
+        tensor_C = TensorDescription(self._element_c, self._layout_c, alignment_C)
+        self.epilogue_functor = self._reset_epilogue_functor_alignment(alignment_C, self.epilogue_functor)
 
         operation = GemmOperationUniversal(
             arch=self.current_cc,
@@ -527,7 +545,7 @@ class Gemm(OperationBase):
         :return: stride between each matrix in the batch
         :rtype: int
         """
-        if len(tensor.shape) > 2:
+        if tensor is not None and len(tensor.shape) > 2:
             return tensor.shape[-2] * tensor.shape[-1]
         else:
             return 0
@@ -566,12 +584,14 @@ class Gemm(OperationBase):
             B_row = self._layout_b == cutlass.LayoutType.RowMajor
             C_row = self._layout_c == cutlass.LayoutType.RowMajor
 
-            batched = lambda x : len(x.shape) > 2 and prod(x.shape[:-2]) == batch_count
+            # Consider a Tensor to be batched if its rank is > 2 and
+            # the product of the modes beyond rank 2 equals our pre-determined batch size.
+            batched = lambda x : x is None or (len(x.shape) > 2 and prod(x.shape[:-2]) == batch_count)
 
-            if batched(A) and not batched(B) and batched(C) and A_row and C_row:
+            if batched(A) and not batched(B) and (C is None or batched(C)) and A_row and C_row:
                 M *= batch_count
                 returned_batch_count = 1
-            elif not batched(A) and batched(B) and batched(C) and not B_row and not C_row:
+            elif not batched(A) and batched(B) and (C is None or batched(C)) and not B_row and not C_row:
                 N *= batch_count
                 returned_batch_count = 1
             else:
@@ -593,12 +613,17 @@ class Gemm(OperationBase):
         """
         dtype, layout = datatypes.get_datatype_and_layout(tensor)
         if dtype != ref_type or layout != ref_layout:
-            raise Exception(f'Tensor {name} with type and layout ({dtype}, {layout}) '
-                            f'does not match the expected type and '
-                            f'layout of ({ref_type}, {ref_layout}).')
+            try:
+                # Attempt to transpose the tensor to fit the desired layout
+                tensor = tensor.transpose(-1, -2)
+            except:
+                raise Exception(f'Tensor {name} with type and layout ({dtype}, {layout}) '
+                                f'does not match the expected type and '
+                                f'layout of ({ref_type}, {ref_layout}) and transpose failed.')
 
     def run(self, A=None, B=None, C=None, D=None,
-            alpha=None, beta=None, sync: bool = True, print_module: bool = False, visitor_args: dict = None) -> GemmArguments:
+            alpha=None, beta=None, sync: bool = True, print_module: bool = False, visitor_args: dict = None,
+            stream: cuda.CUstream = cuda.CUstream(0)) -> GemmArguments:
         """
         Runs the kernel currently specified. If it has not already been, the kernel is emitted and
         compiled. Tensors holding operands and outputs of the kernel are sourced either from the
@@ -621,10 +646,13 @@ class Gemm(OperationBase):
         :type sync: bool
         :param print_module: whether to print the emitted C++ code
         :type print_module: bool
+        :param stream: cuda stream, defaults to cuda.cuda.CUstream(0)
+        :type stream: :class:`cuda.cuda.CUstream`
 
         :return: arguments passed in to the kernel
         :rtype: cutlass.backend.GemmArguments
         """
+        super().run_setup()
         A = self._verify_tensor(A, self.A, self._element_a, self._layout_a, "A")
         B = self._verify_tensor(B, self.B, self._element_b, self._layout_b, "B")
         C = self._verify_tensor(C, self.C, self._element_c, self._layout_c, "C")
@@ -632,14 +660,20 @@ class Gemm(OperationBase):
         alpha = self._verify_scalar(alpha, self.alpha, self._element_c, "alpha")
         beta = self._verify_scalar(beta, self.beta, self._element_c, "beta")
 
+        is_void_c = self._element_c == DataType.void
+
         self._verify_rank(A)
         self._verify_rank(B)
-        self._verify_rank(C)
+        if not is_void_c:
+            self._verify_rank(C)
         self._verify_rank(D)
 
-        alignment_a = self.possible_operations.find_alignment(A.shape, self._layout_a)
-        alignment_b = self.possible_operations.find_alignment(B.shape, self._layout_b)
-        alignment_c = self.possible_operations.find_alignment(C.shape, self._layout_c)
+        alignment_a = self.possible_operations.find_alignment(A.shape, self._layout_a, operand="A")
+        alignment_b = self.possible_operations.find_alignment(B.shape, self._layout_b, operand="B")
+
+        # Set C alignment based on D.shape so as to correctly get an alignment with void-C
+        # kernels, for which `C` is None.
+        alignment_c = self.possible_operations.find_alignment(D.shape, self._layout_c, operand="C")
         self.compile(self._tile_description, alignment_A=alignment_a, alignment_B=alignment_b,
                      alignment_C=alignment_c, print_module=print_module)
 
@@ -657,6 +691,8 @@ class Gemm(OperationBase):
                     'D': self._get_batch_stride(D)
                 }
             }
+
+        kwargs['stream'] = stream
 
         if isinstance(self.epilogue_functor, EpilogueFunctorVisitor):
             output_op = self.operation.epilogue_type(visitor_args)

@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -43,7 +43,7 @@ import cutlass
 from cutlass.backend.utils.device import device_cc
 import torch
 
-from utils import LayoutCombination, add_test_gemm
+from utils import LayoutCombination
 
 cutlass.set_log_level(logging.WARNING)
 

@@ -166,15 +166,23 @@ def run_round(model_path, quant_file, n_generate, token, batch_size, safetensors
 
 
     if model_type == 'bitsandbytes':
-        from transformers import AutoModelForCausalLM
-        model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        torch_dtype=torch.float16,
+        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+        print(f" -- Loading model mix bitsandbytes8...")
+    
+        n_gpus = torch.cuda.device_count()
+        max_memory = f'{int(torch.cuda.mem_get_info()[0]/1024**3)-2}GB'
+        max_memory = {i: max_memory for i in range(n_gpus)}
+        quantization_config = BitsAndBytesConfig(
         load_in_8bit=True,
-        trust_remote_code=True,
-        max_memory=f'{int(torch.cuda.mem_get_info()[0]/1024**3)-2}GB')
-
-
+        llm_int8_threshold=6.0,
+        llm_int8_has_fp16_weight=False,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            device_map='auto',
+            max_memory=max_memory,
+            quantization_config=quantization_config
+        )
 
     if model_type == 'quik':
         from mixquant import AutoForCausalLM
@@ -287,10 +295,7 @@ def main(args):
 
 if __name__ == "__main__":
 
-    """
-    python examples/benchmark.py --model_path /mnt/data/zhongrx/Llama-2-7b-hf --quant_file /mnt/data/chenyd/Llama-2-7b-awq 
 
-    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, default="", help="path to the model")
     parser.add_argument("--quant_file", type=str, default="", help="weights filename")

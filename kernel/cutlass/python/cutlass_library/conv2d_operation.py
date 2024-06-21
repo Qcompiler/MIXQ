@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -35,10 +35,22 @@ Utilities for emitting Conv2d kernels
 """
 
 import enum
+import logging
 import os.path
 import shutil
+from string import Template
 
-from cutlass_library.library import *
+try:
+  import builtins
+  if hasattr(builtins, "CUTLASS_IGNORE_PACKAGE") and CUTLASS_IGNORE_PACKAGE == True:
+    raise ImportError("Disabling attempt to import cutlass_library")
+  from cutlass_library.library import *
+  from cutlass_library.conv3x_emitter import EmitConv3xInstance, EmitConv3xIncludes
+except ImportError:
+  from library import *
+  from conv3x_emitter import EmitConv3xInstance, EmitConv3xIncludes
+
+_LOGGER = logging.getLogger(__name__)
 
 ###################################################################################################
 
@@ -62,11 +74,6 @@ class Conv2dOperation:
     self.stride_support = stride_support
     self.swizzling_functor = swizzling_functor
     self.group_mode = group_mode
-
-  #
-  def is_mixed_input(self):
-    return self.A.element != self.B.element
-  
   #
   def is_complex(self):
     complex_operators = [
@@ -74,6 +81,10 @@ class Conv2dOperation:
       MathOperation.multiply_add_complex_gaussian
       ]
     return self.tile_description.math_instruction.math_operation in complex_operators
+
+  #
+  def is_mixed_input(self):
+    return self.A.element != self.B.element
 
   #
   def accumulator_type(self):
@@ -169,6 +180,8 @@ class Conv2dOperation:
 
 class EmitConv2dInstance:
   def __init__(self):
+    # Emitter for CUTLASS 3 convolution operations
+    self.conv3x_emitter = EmitConv3xInstance()
     self.template = """
   // Conv2d${conv_kind_name} ${iterator_algorithm_name} kernel instance "${operation_name}"
   using ${operation_name}_base =
@@ -262,7 +275,7 @@ class EmitConv2dInstance:
           1,
           ${threadblock_output_shape_n},
           ${threadblock_output_shape_p},
-          ${threadblock_output_shape_q}>, 
+          ${threadblock_output_shape_q}>,
     ${stages},
     ${math_operator},
     ${iterator_algorithm},
@@ -272,7 +285,18 @@ class EmitConv2dInstance:
   >::Kernel;
 """
 
+  def arch_number_to_type(self, arch: int):
+    return f"cutlass::arch::Sm{arch}"
+
   def emit(self, operation):
+    _LOGGER.debug("*** EmitConv2dInstance::emit")
+    _LOGGER.debug("***   operation: procedural_name()=" + operation.procedural_name())
+
+    if hasattr(operation, 'is_3x') and operation.is_3x:
+      _LOGGER.debug("***   CUTLASS 3 operation")
+      return self.conv3x_emitter.emit(operation)
+
+    _LOGGER.debug("***   CUTLASS 2 operation")
 
     warp_shape = [int(operation.tile_description.threadblock_shape[idx] / operation.tile_description.warp_count[idx]) for idx in range(3)]
 
@@ -315,9 +339,11 @@ class EmitConv2dInstance:
     }
 
     if operation.group_mode == GroupMode.NoneGroup:
+      _LOGGER.debug("***   group_mode=NoneGroup")
       return SubstituteTemplate(self.template, values)
 
     elif operation.group_mode == GroupMode.Depthwise:
+      _LOGGER.debug("***   group_mode=Depthwise")
       values['group_mode'] = GroupModeTag[operation.group_mode]
       # Setup other template params
       values['threadblock_output_shape_n'] = str(operation.tile_description.threadblock_output_shape[0])
@@ -338,6 +364,7 @@ class EmitConv2dInstance:
       return SubstituteTemplate(self.template_depthwise_direct_conv, values)
 
     else:
+      _LOGGER.debug("***   group_mode=" + GroupModeTag[operation.group_mode])
       values['group_mode'] = GroupModeTag[operation.group_mode]
       return SubstituteTemplate(self.template_group_conv, values)
 
@@ -349,6 +376,7 @@ class EmitConv2dInstance:
 
 #
 def GenerateConv2dTensorOp(manifest, tile_descriptions, min_cc, align = 128):
+  _LOGGER.debug("*** GenerateConv2dTensorOp")
 
   for tile in tile_descriptions:
     for conv_kind in [ConvKind.Fprop, ConvKind.Dgrad, ConvKind.Wgrad]:
@@ -367,6 +395,24 @@ def GenerateConv2dTensorOp(manifest, tile_descriptions, min_cc, align = 128):
 
           manifest.append(Conv2dOperation(conv_kind, min_cc, tile, A, B, C, tile.math_instruction.element_accumulator))
 
+class EmitConv2dIncludes:
+  '''Emit includes that are specific to the operation.'''
+
+  def __init__(self):
+    self.includes = ['conv2d_operation.h']
+    self.emitter_3x = EmitConv3xIncludes()
+
+  def operation_is_3x(self, operation) -> bool:
+    """Whether operation is a CUTLASS 3 convolution (as opposed to CUTLASS 2)"""
+    return hasattr(operation, 'is_3x') and operation.is_3x
+
+  def emit(self, operation) -> str:
+    if self.operation_is_3x(operation):
+      return self.emitter_3x.emit(operation)
+
+    return '\n'.join(f"#include \"{incl}\"" for incl in self.includes) + \
+      "\n\n///////////////////////////////////////////////////////////////////////////////////////////////////"
+
 ###################################################################################################
 #
 # Emitters functions for all targets
@@ -379,17 +425,8 @@ class EmitConv2dConfigurationLibrary:
     self.configuration_path = os.path.join(operation_path, "%s.cu" % configuration_name)
 
     self.instance_emitter = EmitConv2dInstance()
+    self.includes_emitter = EmitConv2dIncludes()
 
-    self.instance_template = """
-${operation_instance}
-
-// Derived class
-struct ${operation_name} :
-  public ${operation_name}_base { };
-
-///////////////////////////////////////////////////////////////////////////////////////////////////
-
-"""
     self.header_template = """
 /*
   Generated by conv2d_operation.py - Do not edit.
@@ -402,9 +439,17 @@ struct ${operation_name} :
 #include "cutlass/library/manifest.h"
 
 #include "library_internal.h"
-#include "conv2d_operation.h"
+"""
 
+    self.instance_template = """
+${stub_begin}
+${operation_instance}
+// Derived class
+struct ${operation_name} :
+  public ${operation_name}_base { };
+${stub_end}
 ///////////////////////////////////////////////////////////////////////////////////////////////////
+
 """
 
     self.configuration_header = """
@@ -414,32 +459,22 @@ namespace library {
 
 // Initialize all instances
 void initialize_${configuration_name}(Manifest &manifest) {
-
 """
 
-    self.configuration_instance = """
-  using Operation_${operation_name} = cutlass::conv::device::ImplicitGemmConvolution<
+    self.configuration_instance = """${stub_begin}
+  using Operation_${operation_name} = cutlass::conv::device::${kernel_name}<
     ${operation_name}>;
 
-  manifest.append(new cutlass::library::Conv2dOperation<
-    Operation_${operation_name}>(
-      "${operation_name}"));
-
+  manifest.append(new cutlass::library::${operation_wrapper}<
+      Operation_${operation_name}
+    >(
+      "${operation_name}"
+    ));
+${stub_end}
 """
 
-    self.configuration_direct_conv_instance = """
-  using Operation_${operation_name} = cutlass::conv::device::DirectConvolution<
-    ${operation_name}>;
+    self.configuration_epilogue = "}\n"
 
-  manifest.append(new cutlass::library::DirectConv2dOperation<
-    Operation_${operation_name}>(
-      "${operation_name}"));
-
-"""
-
-    self.configuration_epilogue = """
-}
-"""
     self.epilogue_template = """
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -451,42 +486,131 @@ void initialize_${configuration_name}(Manifest &manifest) {
 
 """
 
-  #
+  def operation_is_3x(self, operation):
+    """Whether operation is a CUTLASS 3 convolution (as opposed to CUTLASS 2)"""
+    return hasattr(operation, 'is_3x') and operation.is_3x
+
   def __enter__(self):
+    """
+    Open the configuration_file, and write the "header" C++ code to it.
+
+    The "header" consists of a comment (that this is generated code,
+    so it should not be edited), and includes that are common
+    to all kinds of kernels.
+    """
+    _LOGGER.debug('*** EmitConv2dConfigurationLibrary::__enter__')
+    _LOGGER.debug('***   configuration_path (file to write): ' +
+                  str(self.configuration_path))
+    _LOGGER.debug('***   configuration_name: ' + self.configuration_name)
     self.configuration_file = open(self.configuration_path, "w")
+
     self.configuration_file.write(SubstituteTemplate(self.header_template, {
       'configuration_name': self.configuration_name
       }))
     self.operations = []
     return self
 
-  #
   def emit(self, operation):
+    """
+    Write three pieces of C++ code to the configuration_file
+    (that was opened by the __enter__ method above):
+
+    1. the header includes that are specific to the operation
+       (CUTLASS 2 vs. CUTLASS 3);
+
+    2. the "operation instance" (a "using" declaration ending in "_base"); and
+
+    3. the "operation name" (declaration and definition of a derived class
+       of the above operation instance).
+
+    The "using" declaration turns a C++ class name, possibly namespace-qualified,
+    possibly also with angle brackets, into a C-style, easily demangled identifier.
+    """
+    _LOGGER.debug('*** EmitConv2dConfigurationLibrary::emit')
+    _LOGGER.debug('***   operation.procedural_name(): ' + operation.procedural_name())
     self.operations.append(operation)
-    self.configuration_file.write(SubstituteTemplate(self.instance_template, {
+
+    self.configuration_file.write(self.includes_emitter.emit(operation))
+
+    stub_begin = ''
+    stub_end = ''
+    # It can be useful to stub (comment) out instantiations for testing.
+    # In this case, one need only set is_stub to True.
+    is_stub = False
+    if is_stub:
+      stub_begin = "// STUB for now\n#if 0"
+      stub_end = '#endif // 0'
+
+    self.configuration_file.write(Template(self.instance_template).substitute({
       'configuration_name': self.configuration_name,
       'operation_name': operation.procedural_name(),
-      'operation_instance': self.instance_emitter.emit(operation)
+      'operation_instance': self.instance_emitter.emit(operation),
+      'stub_begin': stub_begin,
+      'stub_end': stub_end
       }))
 
-  #
   def __exit__(self, exception_type, exception_value, traceback):
+    """
+    Write the rest of the C++ code to the configuration_file, and close the file.
+
+    The "rest of the C++ code" has the following components.
+
+    1. Configuration header: Open the namespace(s), and open the definition
+       of the "initialize_${configuration_name}" registration function
+       that registers the operation with the Manifest.
+       ("Registration" helps turn C++ compile-time polymorphism
+       (via template parameters) into a run-time choice of parameters.)
+
+    2. Configuration instance: In the body of the registration function,
+       make a "using" declaration Operation_${operation_name} for the
+       operation type (which uses operation_name as its template argument).
+       Then, tell the manifest about the operation via a "manifest.append" call.
+       The argument of the call is a new instance of
+       "SomethingOperation<Operation_${operation_name}>"
+       (replace Something with a specific name).
+
+    3. Configuration epilogue: Close the definition of the registration function.
+
+    4. Epilogue template: Close the namespace(s).
+    """
+
+    _LOGGER.debug('*** EmitConv2dConfigurationLibrary::__exit__')
+    _LOGGER.debug('***   configuration_path (file to write): ' +
+                  str(self.configuration_path))
+    _LOGGER.debug('***   configuration_name: ' + self.configuration_name)
 
     self.configuration_file.write(SubstituteTemplate(self.configuration_header, {
       'configuration_name': self.configuration_name
       }))
 
     for operation in self.operations:
+      stub_begin = ''
+      stub_end = ''
+      # It can be useful to stub (comment) out instantiations for testing.
+      # In this case, one need only set is_stub to True.
+      is_stub = False
+      if is_stub:
+        stub_begin = "// STUB for now\n#if 0"
+        stub_end = "#endif // 0"
+
       if operation.group_mode == GroupMode.Depthwise:
-        self.configuration_file.write(SubstituteTemplate(self.configuration_direct_conv_instance, {
-          'configuration_name': self.configuration_name,
-          'operation_name': operation.procedural_name()
-        }))
+        kernel_name = 'DirectConvolution'
+        operation_wrapper = 'DirectConv2dOperation'
       else:
-        self.configuration_file.write(SubstituteTemplate(self.configuration_instance, {
-          'configuration_name': self.configuration_name,
-          'operation_name': operation.procedural_name()
-        }))
+        kernel_name = 'ImplicitGemmConvolution'
+        operation_wrapper = 'Conv2dOperation'
+      if self.operation_is_3x(operation):
+        kernel_name = 'ConvUniversalAdapter'
+        operation_wrapper = 'ConvOperation3x'
+
+      self.configuration_file.write(SubstituteTemplate(self.configuration_instance, {
+        'configuration_name': self.configuration_name,
+        'operation_name': operation.procedural_name(),
+        'kernel_name': kernel_name,
+        'operation_wrapper': operation_wrapper,
+        'stub_begin': stub_begin,
+        'stub_end': stub_end
+      }))
 
     self.configuration_file.write(self.configuration_epilogue)
     self.configuration_file.write(self.epilogue_template)

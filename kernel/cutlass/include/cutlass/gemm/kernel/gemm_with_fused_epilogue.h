@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -42,7 +42,7 @@
 #include "cutlass/complex.h"
 #include "cutlass/semaphore.h"
 #include "cutlass/gemm/kernel/params_universal_base.h"
-
+#include "cutlass/subbyte_reference.h"
 #include "cutlass/trace.h"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -54,7 +54,7 @@ namespace kernel {
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <
-  typename Mma_,                  ///! Threadblock-scoped matrix multiply-accumulate 
+  typename Mma_,                  ///! Threadblock-scoped matrix multiply-accumulate
   typename Epilogue_,             ///! Epilogue
   typename ThreadblockSwizzle_,   ///! Threadblock swizzling function
   bool IsSingleSource = Epilogue_::kIsSingleSource
@@ -63,7 +63,7 @@ struct GemmWithFusedEpilogue;
 
 // GemmWithFusedEpilogue with two sources
 template <
-  typename Mma_,                  ///! Threadblock-scoped matrix multiply-accumulate 
+  typename Mma_,                  ///! Threadblock-scoped matrix multiply-accumulate
   typename Epilogue_,             ///! Epilogue
   typename ThreadblockSwizzle_    ///! Threadblock swizzling function
 >
@@ -103,7 +103,7 @@ public:
 
   /// Split-K preserves splits that are 128b aligned
   static int const kSplitKAlignment = const_max(
-    128 / sizeof_bits<ElementA>::value, 
+    128 / sizeof_bits<ElementA>::value,
     128 / sizeof_bits<ElementB>::value
   );
 
@@ -147,8 +147,8 @@ public:
     //
     // Methods
     //
-    
-    Arguments(): 
+
+    Arguments():
       ptr_A(nullptr),
       ptr_B(nullptr),
       ptr_C1(nullptr),
@@ -185,14 +185,14 @@ public:
       typename LayoutC::Stride::Index ldt)
     :
       UniversalArgumentsBase(mode, problem_size, batch_count, batch_stride_D),
-      epilogue(epilogue), 
-      ptr_A(ptr_A), ptr_B(ptr_B), ptr_C1(ptr_C1), ptr_C2(ptr_C2), ptr_D(ptr_D), 
-      ptr_Vector(ptr_Vector), 
+      epilogue(epilogue),
+      ptr_A(ptr_A), ptr_B(ptr_B), ptr_C1(ptr_C1), ptr_C2(ptr_C2), ptr_D(ptr_D),
+      ptr_Vector(ptr_Vector),
       ptr_Tensor(ptr_Tensor),
-      batch_stride_A(batch_stride_A), 
-      batch_stride_B(batch_stride_B), 
-      batch_stride_C1(batch_stride_C1), 
-      batch_stride_C2(batch_stride_C2), 
+      batch_stride_A(batch_stride_A),
+      batch_stride_B(batch_stride_B),
+      batch_stride_C1(batch_stride_C1),
+      batch_stride_C2(batch_stride_C2),
       batch_stride_Vector(batch_stride_Vector),
       batch_stride_Tensor(batch_stride_Tensor),
       lda(lda), ldb(ldb), ldc1(ldc1), ldc2(ldc2), ldd(ldd), ldr(ldr), ldt(ldt)
@@ -207,7 +207,7 @@ public:
     /// Returns arguments for the transposed problem
     Arguments transposed_problem() const {
       Arguments args(*this);
-      
+
       std::swap(args.problem_size.m(), args.problem_size.n());
       std::swap(args.ptr_A, args.ptr_B);
       std::swap(args.lda, args.ldb);
@@ -307,7 +307,7 @@ public:
       batch_stride_Vector(args.batch_stride_Vector),
       batch_stride_Tensor(args.batch_stride_Tensor)
     {
-      CUTLASS_TRACE_HOST("GemmWithFusedEpilogue::Params::Params() - problem_size: " << problem_size);
+      CUTLASS_TRACE_HOST("GemmWithFusedEpilogue::Params::Params()");
       CUTLASS_TRACE_HOST("  ptr_Vector: " << (void *)this->ptr_Vector);
       CUTLASS_TRACE_HOST("  ptr_Tensor: " << (void *)this->ptr_Tensor);
       CUTLASS_TRACE_HOST("  ldr: " << this->ldr);
@@ -460,7 +460,7 @@ public:
     int offset_k = 0;
     int problem_size_k = params.problem_size.k();
 
-    ElementA *ptr_A = static_cast<ElementA *>(params.ptr_A); 
+    ElementA *ptr_A = static_cast<ElementA *>(params.ptr_A);
     ElementB *ptr_B = static_cast<ElementB *>(params.ptr_B);
 
 
@@ -468,12 +468,12 @@ public:
     //
     // Fetch pointers based on mode.
     //
-    if (params.mode == GemmUniversalMode::kGemm || 
+    if (params.mode == GemmUniversalMode::kGemm ||
       params.mode == GemmUniversalMode::kGemmSplitKParallel) {
 
       if (threadblock_tile_offset.k() + 1 < params.grid_tiled_shape.k()) {
 
-        problem_size_k = (threadblock_tile_offset.k() + 1) * params.gemm_k_size; 
+        problem_size_k = (threadblock_tile_offset.k() + 1) * params.gemm_k_size;
       }
 
       offset_k = threadblock_tile_offset.k() * params.gemm_k_size;
@@ -539,10 +539,10 @@ public:
 
     // Compute threadblock-scoped matrix multiply-add
     mma(
-      gemm_k_iterations, 
-      accumulators, 
-      iterator_A, 
-      iterator_B, 
+      gemm_k_iterations,
+      accumulators,
+      iterator_A,
+      iterator_B,
       accumulators);
 
     //
@@ -571,16 +571,16 @@ public:
     typename Epilogue::ElementTensor *ptr_Tensor = static_cast<typename Epilogue::ElementTensor *>(params.ptr_Tensor);
 
     // Define the reduction output pointer and move to the appropriate place
-    typename Epilogue::ElementVector *ptr_Vector = 
+    typename Epilogue::ElementVector *ptr_Vector =
       static_cast<typename Epilogue::ElementVector *>(params.ptr_Vector);
 
     //
     // Fetch pointers based on mode.
     //
-    
+
     //
     // Special path when split-K not enabled.
-    // 
+    //
 
     if (params.mode == GemmUniversalMode::kGemm && params.grid_tiled_shape.k() == 1) {
 
@@ -621,9 +621,9 @@ public:
 
       // Construct the epilogue
       Epilogue epilogue(
-        shared_storage.epilogue, 
-        thread_idx, 
-        warp_idx, 
+        shared_storage.epilogue,
+        thread_idx,
+        warp_idx,
         lane_idx);
 
       // Move to appropriate location for this output tile
@@ -649,7 +649,7 @@ public:
     // Slower path when split-K or batching is needed
     //
 
-      
+
     #if SPLIT_K_ENABLED
     // Construct the semaphore.
     Semaphore semaphore(params.semaphore + block_idx, thread_idx);
@@ -658,7 +658,7 @@ public:
 
       // If performing a reduction via split-K, fetch the initial synchronization
       if (params.grid_tiled_shape.k() > 1) {
-        
+
         // Fetch the synchronization lock initially but do not block.
         semaphore.fetch();
 
@@ -676,7 +676,9 @@ public:
       }
       ptr_D += threadblock_tile_offset.k() * params.batch_stride_D;
       if (ptr_Tensor) {
-        ptr_Tensor += threadblock_tile_offset.k() * params.batch_stride_Tensor;
+        ptr_Tensor = ReferenceFactory<typename Epilogue::ElementTensor>::add_pointer_offset(
+          ptr_Tensor,
+          threadblock_tile_offset.k() * params.batch_stride_Tensor);
       }
       if (ptr_Vector) {
         ptr_Vector += threadblock_tile_offset.k() * params.batch_stride_Vector;
@@ -737,15 +739,15 @@ public:
 
     // Construct the epilogue
     Epilogue epilogue(
-      shared_storage.epilogue, 
-      thread_idx, 
-      warp_idx, 
+      shared_storage.epilogue,
+      thread_idx,
+      warp_idx,
       lane_idx);
 
     #if SPLIT_K_ENABLED
     // Wait on the semaphore - this latency may have been covered by iterator construction
     if ((params.mode == GemmUniversalMode::kGemm) && params.grid_tiled_shape.k() > 1) {
-        
+
       // For subsequent threadblocks, the source matrix is held in the 'D' tensor.
       if (threadblock_tile_offset.k()) {
         iterator_C1 = iterator_D;
@@ -781,7 +783,7 @@ public:
     //
 
     #if SPLIT_K_ENABLED
-    if ((params.mode == GemmUniversalMode::kGemm)  && params.grid_tiled_shape.k() > 1) { 
+    if ((params.mode == GemmUniversalMode::kGemm)  && params.grid_tiled_shape.k() > 1) {
 
       int lock = 0;
       if (params.grid_tiled_shape.k() == threadblock_tile_offset.k() + 1) {
@@ -793,7 +795,7 @@ public:
         // Otherwise, the semaphore is incremented
         lock = threadblock_tile_offset.k() + 1;
       }
-      
+
       semaphore.release(lock);
     }
     #endif
@@ -802,7 +804,7 @@ public:
 
 // GemmWithFusedEpilogue with one source
 template <
-  typename Mma_,                  ///! Threadblock-scoped matrix multiply-accumulate 
+  typename Mma_,                  ///! Threadblock-scoped matrix multiply-accumulate
   typename Epilogue_,             ///! Epilogue
   typename ThreadblockSwizzle_    ///! Threadblock swizzling function
 >
@@ -842,7 +844,7 @@ public:
 
   /// Split-K preserves splits that are 128b aligned
   static int const kSplitKAlignment = const_max(
-    128 / sizeof_bits<ElementA>::value, 
+    128 / sizeof_bits<ElementA>::value,
     128 / sizeof_bits<ElementB>::value
   );
 
@@ -883,8 +885,8 @@ public:
     //
     // Methods
     //
-    
-    Arguments(): 
+
+    Arguments():
       ptr_A(nullptr),
       ptr_B(nullptr),
       ptr_C(nullptr),
@@ -917,13 +919,13 @@ public:
       typename LayoutC::Stride::Index ldt)
     :
       UniversalArgumentsBase(mode, problem_size, batch_count, batch_stride_D),
-      epilogue(epilogue), 
-      ptr_A(ptr_A), ptr_B(ptr_B), ptr_C(ptr_C), ptr_D(ptr_D), 
-      ptr_Vector(ptr_Vector), 
+      epilogue(epilogue),
+      ptr_A(ptr_A), ptr_B(ptr_B), ptr_C(ptr_C), ptr_D(ptr_D),
+      ptr_Vector(ptr_Vector),
       ptr_Tensor(ptr_Tensor),
-      batch_stride_A(batch_stride_A), 
-      batch_stride_B(batch_stride_B), 
-      batch_stride_C(batch_stride_C), 
+      batch_stride_A(batch_stride_A),
+      batch_stride_B(batch_stride_B),
+      batch_stride_C(batch_stride_C),
       batch_stride_Vector(batch_stride_Vector),
       batch_stride_Tensor(batch_stride_Tensor),
       lda(lda), ldb(ldb), ldc(ldc), ldd(ldd), ldr(ldr), ldt(ldt)
@@ -938,7 +940,7 @@ public:
     /// Returns arguments for the transposed problem
     Arguments transposed_problem() const {
       Arguments args(*this);
-      
+
       std::swap(args.problem_size.m(), args.problem_size.n());
       std::swap(args.ptr_A, args.ptr_B);
       std::swap(args.lda, args.ldb);
@@ -1033,7 +1035,7 @@ public:
       batch_stride_Vector(args.batch_stride_Vector),
       batch_stride_Tensor(args.batch_stride_Tensor)
     {
-      CUTLASS_TRACE_HOST("GemmWithFusedEpilogue::Params::Params() - problem_size: " << problem_size);
+      CUTLASS_TRACE_HOST("GemmWithFusedEpilogue::Params::Params()");
       CUTLASS_TRACE_HOST("  ptr_Vector: " << (void *)this->ptr_Vector);
       CUTLASS_TRACE_HOST("  ptr_Tensor: " << (void *)this->ptr_Tensor);
       CUTLASS_TRACE_HOST("  ldr: " << this->ldr);
@@ -1184,7 +1186,7 @@ public:
     int offset_k = 0;
     int problem_size_k = params.problem_size.k();
 
-    ElementA *ptr_A = static_cast<ElementA *>(params.ptr_A); 
+    ElementA *ptr_A = static_cast<ElementA *>(params.ptr_A);
     ElementB *ptr_B = static_cast<ElementB *>(params.ptr_B);
 
 
@@ -1192,12 +1194,12 @@ public:
     //
     // Fetch pointers based on mode.
     //
-    if (params.mode == GemmUniversalMode::kGemm || 
+    if (params.mode == GemmUniversalMode::kGemm ||
       params.mode == GemmUniversalMode::kGemmSplitKParallel) {
 
       if (threadblock_tile_offset.k() + 1 < params.grid_tiled_shape.k()) {
 
-        problem_size_k = (threadblock_tile_offset.k() + 1) * params.gemm_k_size; 
+        problem_size_k = (threadblock_tile_offset.k() + 1) * params.gemm_k_size;
       }
 
       offset_k = threadblock_tile_offset.k() * params.gemm_k_size;
@@ -1263,10 +1265,10 @@ public:
 
     // Compute threadblock-scoped matrix multiply-add
     mma(
-      gemm_k_iterations, 
-      accumulators, 
-      iterator_A, 
-      iterator_B, 
+      gemm_k_iterations,
+      accumulators,
+      iterator_A,
+      iterator_B,
       accumulators);
 
     //
@@ -1294,16 +1296,16 @@ public:
     typename Epilogue::ElementTensor *ptr_Tensor = static_cast<typename Epilogue::ElementTensor *>(params.ptr_Tensor);
 
     // Define the reduction output pointer and move to the appropriate place
-    typename Epilogue::ElementVector *ptr_Vector = 
+    typename Epilogue::ElementVector *ptr_Vector =
       static_cast<typename Epilogue::ElementVector *>(params.ptr_Vector);
 
     //
     // Fetch pointers based on mode.
     //
-    
+
     //
     // Special path when split-K not enabled.
-    // 
+    //
 
     if (params.mode == GemmUniversalMode::kGemm && params.grid_tiled_shape.k() == 1) {
 
@@ -1336,9 +1338,9 @@ public:
 
       // Construct the epilogue
       Epilogue epilogue(
-        shared_storage.epilogue, 
-        thread_idx, 
-        warp_idx, 
+        shared_storage.epilogue,
+        thread_idx,
+        warp_idx,
         lane_idx);
 
       // Move to appropriate location for this output tile
@@ -1363,7 +1365,7 @@ public:
     // Slower path when split-K or batching is needed
     //
 
-      
+
     #if SPLIT_K_ENABLED
     // Construct the semaphore.
     Semaphore semaphore(params.semaphore + block_idx, thread_idx);
@@ -1372,7 +1374,7 @@ public:
 
       // If performing a reduction via split-K, fetch the initial synchronization
       if (params.grid_tiled_shape.k() > 1) {
-        
+
         // Fetch the synchronization lock initially but do not block.
         semaphore.fetch();
 
@@ -1387,7 +1389,9 @@ public:
       ptr_C += threadblock_tile_offset.k() * params.batch_stride_C;
       ptr_D += threadblock_tile_offset.k() * params.batch_stride_D;
       if (ptr_Tensor) {
-        ptr_Tensor += threadblock_tile_offset.k() * params.batch_stride_Tensor;
+        ptr_Tensor = ReferenceFactory<typename Epilogue::ElementTensor>::add_pointer_offset(
+          ptr_Tensor,
+          threadblock_tile_offset.k() * params.batch_stride_Tensor);
       }
       if (ptr_Vector) {
         ptr_Vector += threadblock_tile_offset.k() * params.batch_stride_Vector;
@@ -1437,15 +1441,15 @@ public:
 
     // Construct the epilogue
     Epilogue epilogue(
-      shared_storage.epilogue, 
-      thread_idx, 
-      warp_idx, 
+      shared_storage.epilogue,
+      thread_idx,
+      warp_idx,
       lane_idx);
 
     #if SPLIT_K_ENABLED
     // Wait on the semaphore - this latency may have been covered by iterator construction
     if ((params.mode == GemmUniversalMode::kGemm) && params.grid_tiled_shape.k() > 1) {
-        
+
       // For subsequent threadblocks, the source matrix is held in the 'D' tensor.
       if (threadblock_tile_offset.k()) {
         iterator_C = iterator_D;
@@ -1480,7 +1484,7 @@ public:
     //
 
     #if SPLIT_K_ENABLED
-    if ((params.mode == GemmUniversalMode::kGemm)  && params.grid_tiled_shape.k() > 1) { 
+    if ((params.mode == GemmUniversalMode::kGemm)  && params.grid_tiled_shape.k() > 1) {
 
       int lock = 0;
       if (params.grid_tiled_shape.k() == threadblock_tile_offset.k() + 1) {
@@ -1492,7 +1496,7 @@ public:
         // Otherwise, the semaphore is incremented
         lock = threadblock_tile_offset.k() + 1;
       }
-      
+
       semaphore.release(lock);
     }
     #endif

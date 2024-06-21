@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -183,7 +183,7 @@ TEST(Epilogue_thread_linear_combination_planar_complex, f16_f32) {
     source.imag[i] = ElementOutput(((i * 5 + 2) % 9) - 4);
   }
 
-  cutlass::ArrayPlanarComplex<ElementOutput, kCount> destination = linear_combination_op(accum, source);
+  cutlass::ArrayPlanarComplex<ElementOutput, kCount> destination{ linear_combination_op(accum, source) };
 
   // Verify each result
   for (int i = 0; i < kCount; ++i) {

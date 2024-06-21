@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -121,7 +121,7 @@ struct CommandLine {
    * Returns the commandline parameter for a given index (not including flags)
    */
   template <typename value_t>
-  void get_cmd_line_argument(int index, value_t& val) const {
+  void get_cmd_line_argument(size_t index, value_t& val) const {
     using namespace std;
     if (index < args.size()) {
       istringstream str_stream(args[index]);
@@ -185,7 +185,7 @@ struct CommandLine {
       vals.clear();
 
       // Recover from multi-value string
-      for (int i = 0; i < keys.size(); ++i) {
+      for (size_t i = 0; i < keys.size(); ++i) {
         if (keys[i] == string(arg_name)) {
           string val_string(values[i]);
           separate_string(val_string, vals, sep);

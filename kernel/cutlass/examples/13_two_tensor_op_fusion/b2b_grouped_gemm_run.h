@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -102,7 +102,7 @@ struct B2bFusedGroupedGemmRun
     if (dist_kind == cutlass::Distribution::Uniform) {
 
       cutlass::reference::host::TensorFillRandomUniform(
-        view, seed, 2, -2, 0);
+        view, seed, 1, -1, 0);
     } 
     else if (dist_kind == cutlass::Distribution::Identity) {
 

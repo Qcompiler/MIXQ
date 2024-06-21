@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -99,7 +99,7 @@ TEST(SM90_Device_Gemm_f8t_f8n_f8t_tensor_op_gmma_f32_persistent_epilogue, 64x128
       cutlass::float_e4m3_t, LayoutB, 16,
       float,
       TileShape_MNK, ClusterShape_MNK,
-      cutlass::gemm::collective::StageCountAutoCarveout<sizeof(typename CollectiveEpilogue::SharedStorage)>,
+      cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(sizeof(typename CollectiveEpilogue::SharedStorage))>,
       cutlass::gemm::KernelTmaWarpSpecialized
     >::CollectiveOp;
 
@@ -175,7 +175,7 @@ TEST(SM90_Device_Gemm_f8t_f8n_f8t_tensor_op_gmma_f32_persistent_epilogue, 64x128
       cutlass::float_e4m3_t, LayoutB, 16,
       float,
       TileShape_MNK, ClusterShape_MNK,
-      cutlass::gemm::collective::StageCountAutoCarveout<sizeof(typename CollectiveEpilogue::SharedStorage)>,
+      cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(sizeof(typename CollectiveEpilogue::SharedStorage))>,
       cutlass::gemm::KernelTmaWarpSpecialized
     >::CollectiveOp;
 

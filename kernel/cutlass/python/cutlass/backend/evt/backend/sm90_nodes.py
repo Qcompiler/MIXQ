@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -32,7 +32,7 @@
 
 from pycute import product
 
-from cutlass import DataTypeSize, DataTypeTag
+from cutlass_library import DataTypeSize, DataTypeTag
 from cutlass.backend.evt.ir import (
     # Load Node
     AccumulatorImpl,
@@ -87,7 +87,7 @@ class Sm90LoadSrcImpl(LoadSrcImpl):
         self._type_decl = f"""
 using ElementC = {DataTypeTag[self.element]};
 using StrideC = {self.stride_mnl};
-using {self.name_camel} = cutlass::epilogue::fusion::Sm90SrcFetch;
+using {self.name_camel} = cutlass::epilogue::fusion::Sm90SrcFetch<{DataTypeTag[self.element]}>;
 """
         return self._type_decl
 
@@ -299,7 +299,7 @@ class Sm90ColumnReductionImpl(ColumnReductionImpl):
 
         self._type_decl = f"""
 using {self.name_camel} = cutlass::epilogue::fusion::Sm90ColReduction<
-    {op_tag(self.reg_reduce_fn)}, {op_tag(self.gmem_reduce_fn)}, 0,
+    {op_tag(self.reg_reduce_fn)}, {op_tag(self.reg_reduce_fn)}, {op_tag(self.gmem_reduce_fn)}, 0,
     typename EpilogueDescriptor::TileShape, {DataTypeTag[self.element]},
     {DataTypeTag[self.element_compute]}, {FloatRoundStyleTag[self.round_style]},
     {self.stride_mnl}
@@ -321,7 +321,7 @@ class Sm90RowReductionImpl(RowReductionImpl):
 
         self._type_decl = f"""
 using {self.name_camel} = cutlass::epilogue::fusion::Sm90RowReduction<
-    {op_tag(self.reg_reduce_fn)}, {op_tag(self.gmem_reduce_fn)}, 0 /* Stages */,
+    {op_tag(self.reg_reduce_fn)}, {op_tag(self.reg_reduce_fn)}, {op_tag(self.gmem_reduce_fn)}, 0 /* Stages */,
     typename EpilogueDescriptor::TileShape, {DataTypeTag[self.element]},
     {DataTypeTag[self.element_compute]}, {FloatRoundStyleTag[self.round_style]},
     {self.stride_mnl}

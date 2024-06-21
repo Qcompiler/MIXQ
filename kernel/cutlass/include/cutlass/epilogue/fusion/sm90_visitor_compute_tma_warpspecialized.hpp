@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -38,6 +38,7 @@
 #include "cutlass/cutlass.h"
 #include "cutlass/array.h"
 #include "cutlass/numeric_conversion.h"
+#include "cutlass/epilogue/thread/activation.h"
 
 #include "cute/tensor.hpp"
 
@@ -60,6 +61,25 @@ using namespace detail;
 //
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
+// The template argument provided for ComputeFn must be able to accept
+// exactly one template parameter.  In Standard C++, it's OK for
+// ComputeFn to have other template parameters, as long as those have
+// defaults.  For example, the following struct Foo would work.
+//
+// template<class A, class B = A>
+// struct Foo {
+//   CUTLASS_HOST_DEVICE auto operator() (A a, B b);
+// };
+//
+// However, some compilers, such as Clang, require that the argument
+// take _exactly_ one template parameter.  This is nonstandard C++
+// behavior.  One work-around for this case is to create a subclass
+// with exactly one template parameter, and then use that subclass as
+// the template argument.
+//
+// template<class A>
+// struct FooHomogeneous : public Foo<A, B> {};
+//
 template<
   template <class> class ComputeFn,
   class ElementOutput,
@@ -67,84 +87,45 @@ template<
   FloatRoundStyle RoundStyle,
   class = void
 >
-struct Sm90Compute : Sm90VisitorImpl<> {
+struct Sm90Compute {
+private:
+  using EmptyArguments = typename Sm90VisitorImpl<>::Arguments;
 
-  using Sm90VisitorImpl<>::Sm90VisitorImpl;
-
-  struct ConsumerStoreCallbacks : EmptyConsumerStoreCallbacks {
-    template <typename ElementAccumulator, typename... ElementInputs, int FragmentSize>
-    CUTLASS_DEVICE Array<ElementOutput, FragmentSize>
-    visit(Array<ElementAccumulator, FragmentSize> const& frg_acc, int epi_v, int epi_m, int epi_n,
-          Array<ElementInputs, FragmentSize> const&... frg_inputs) {
-      return transform_apply(cute::make_tuple(frg_inputs...),
-        [&] (auto&& frg_input) {
-          using ElementInput = typename cute::remove_cvref_t<decltype(frg_input)>::Element;
-          using ConvertInput = NumericArrayConverter<ElementCompute, ElementInput, FragmentSize, RoundStyle>;
-          ConvertInput convert_input{};
-
-          return convert_input(frg_input);
-        },
-        [&] (auto&&... cvt_frg_inputs) {
-          using ComputeOutput = ComputeFn<Array<ElementCompute, FragmentSize>>;
-          using ConvertOutput = NumericArrayConverter<ElementOutput, ElementCompute, FragmentSize, RoundStyle>;
-          ComputeOutput compute_output{};
-          ConvertOutput convert_output{};
-
-          return convert_output(compute_output(cvt_frg_inputs...));
-        }
-      );
-    }
-
+  template <class Fn, class = void>
+  struct ComputeArguments {
+    using type = EmptyArguments;
   };
 
-  template <
-    bool ReferenceSrc, // do register tensors reference the src or dst layout of the tiled copy
-    class ProblemShapeMNKL,
-    class TileShapeMNK,
-    class TileCoordMNKL,
-    class EpilogueTile,
-    class TiledCopy,
-    class SrcTensor
-  >
-  CUTLASS_DEVICE auto
-  get_consumer_store_callbacks(
-      ProblemShapeMNKL problem_shape_mnkl,
-      TileShapeMNK tile_shape_mnk,
-      TileCoordMNKL tile_coord_mnkl,
-      EpilogueTile epi_tile,
-      TiledCopy tiled_copy,
-      int thread_idx,
-      SrcTensor const& tCrC) {
-    return ConsumerStoreCallbacks();
-  }
+  // partial specialization for compute fns that define an Arguments member, e.g. activation hyperparameters
+  template <class Fn>
+  struct ComputeArguments<Fn, platform::void_t<typename Fn::Arguments>> {
+    using type = typename Fn::Arguments;
+  };
 
-};
-
-// partial specialization for compute fns that define an Arguments member, e.g. activation hyperparameters
-template<
-  template <class> class ComputeFn,
-  class ElementOutput,
-  class ElementCompute,
-  FloatRoundStyle RoundStyle
->
-struct Sm90Compute<
-  ComputeFn,
-  ElementOutput,
-  ElementCompute,
-  RoundStyle,
-  cute::void_t<typename ComputeFn<ElementCompute>::Arguments>
-> {
-
+public:
   struct SharedStorage { };
 
-  using Arguments = typename ComputeFn<ElementCompute>::Arguments;
+  using Arguments = typename ComputeArguments<ComputeFn<ElementCompute>>::type;
 
   using Params = Arguments;
 
   template <class ProblemShape>
   static constexpr Params
-  to_underlying_arguments(ProblemShape const& problem_shape, Arguments const& args, void* workspace) {
+  to_underlying_arguments(ProblemShape const&, Arguments const& args, void*) {
     return args;
+  }
+
+  template <class ProblemShape>
+  static size_t
+  get_workspace_size(ProblemShape const&, Arguments const&) {
+    return 0;
+  }
+
+  template <class ProblemShape>
+  static cutlass::Status
+  initialize_workspace(ProblemShape const& problem_shape, Arguments const& args, void* workspace, cudaStream_t stream, 
+    CudaHostAdapter* cuda_adapter = nullptr) {
+    return cutlass::Status::kSuccess;
   }
 
   CUTLASS_DEVICE bool
@@ -166,19 +147,9 @@ struct Sm90Compute<
 
   Params const params;
 
-  template <
-    class ProblemShapeMNKL,
-    class TileShapeMNK,
-    class TileCoordMNKL,
-    class EpilogueTile
-  >
+  template <class... Args>
   CUTLASS_DEVICE auto
-  get_producer_load_callbacks(
-      ProblemShapeMNKL problem_shape_mnkl,
-      TileShapeMNK tile_shape_mnk,
-      TileCoordMNKL tile_coord_mnkl,
-      EpilogueTile epi_tile,
-      int thread_idx) {
+  get_producer_load_callbacks(ProducerLoadArgs<Args...> const& args) {
     return EmptyProducerLoadCallbacks{};
   }
 
@@ -207,7 +178,12 @@ struct Sm90Compute<
           ComputeOutput compute_output{};
           ConvertOutput convert_output{};
 
-          return convert_output(compute_output(cvt_frg_inputs..., params));
+          if constexpr (cute::is_same_v<Arguments, EmptyArguments>) {
+            return convert_output(compute_output(cvt_frg_inputs...));
+          }
+          else {
+            return convert_output(compute_output(cvt_frg_inputs..., params));
+          }
         }
       );
     }
@@ -216,22 +192,10 @@ struct Sm90Compute<
 
   template <
     bool ReferenceSrc, // do register tensors reference the src or dst layout of the tiled copy
-    class ProblemShapeMNKL,
-    class TileShapeMNK,
-    class TileCoordMNKL,
-    class EpilogueTile,
-    class TiledCopy,
-    class SrcTensor
+    class... Args
   >
   CUTLASS_DEVICE auto
-  get_consumer_store_callbacks(
-      ProblemShapeMNKL problem_shape_mnkl,
-      TileShapeMNK tile_shape_mnk,
-      TileCoordMNKL tile_coord_mnkl,
-      EpilogueTile epi_tile,
-      TiledCopy tiled_copy,
-      int thread_idx,
-      SrcTensor const& tCrC) {
+  get_consumer_store_callbacks(ConsumerStoreArgs<Args...> const& args) {
     return ConsumerStoreCallbacks(params);
   }
 
@@ -248,48 +212,55 @@ template <
   class ElementOutput,
   class ElementCompute,
   FloatRoundStyle RoundStyle,
-  class ElementScalar,
-  class StrideScalar,
-  int ScalarCount,
-  template <class> class ScalarReduceFn,
-  class InputAddOp // Z
+  class InputScaleOp,  // beta
+  class ElementSource, // C
+  class InputAddOp     // Z
 >
 struct Sm90TreeVisitor<
-  Sm90Compute<multiply_add, ElementOutput, ElementCompute, RoundStyle>,
-  Sm90ScalarBroadcast<ElementScalar, StrideScalar, ScalarCount, ScalarReduceFn>,
-  Sm90SrcFetch,
+  Sm90Compute<homogeneous_multiply_add, ElementOutput, ElementCompute, RoundStyle,
+              cute::void_t<decltype(declval<InputScaleOp>().is_zero())>>,
+  InputScaleOp,
+  Sm90SrcFetch<ElementSource>,
   InputAddOp
 > : Sm90VisitorImpl<
-      Sm90ScalarBroadcast<ElementScalar, StrideScalar, ScalarCount, ScalarReduceFn>,
-      Sm90SrcFetch,
+      InputScaleOp,
+      Sm90SrcFetch<ElementSource>,
       InputAddOp,
-      Sm90Compute<multiply_add, ElementOutput, ElementCompute, RoundStyle>
+      Sm90Compute<homogeneous_multiply_add, ElementOutput, ElementCompute, RoundStyle>
     >
 {
   using Impl =
     Sm90VisitorImpl<
-      Sm90ScalarBroadcast<ElementScalar, StrideScalar, ScalarCount, ScalarReduceFn>,
-      Sm90SrcFetch,
+      InputScaleOp,
+      Sm90SrcFetch<ElementSource>,
       InputAddOp,
-      Sm90Compute<multiply_add, ElementOutput, ElementCompute, RoundStyle>
+      Sm90Compute<homogeneous_multiply_add, ElementOutput, ElementCompute, RoundStyle>
     >;
+  using Params = typename Impl::Params;
+  using SharedStorage = typename Impl::SharedStorage;
+
+  CUTLASS_HOST_DEVICE
+  Sm90TreeVisitor() {}
+
+  CUTLASS_HOST_DEVICE
+  Sm90TreeVisitor(
+      Params const& params,
+      SharedStorage const& shared_storage)
+    : Impl(params, shared_storage) {}
 
   CUTLASS_DEVICE bool
   is_producer_load_needed() const {
-    auto const& bcast_op = get<0>(Impl::ops);
     auto const& added_op = get<2>(Impl::ops);
-    return not (bcast_op.params_ptr->dScalar == Stride<_0,_0,_0>{} && not is_C_load_needed()) ||
-           added_op.is_producer_load_needed();
+    return is_C_load_needed() || added_op.is_producer_load_needed();
   }
 
   CUTLASS_DEVICE bool
   is_C_load_needed() const {
-    auto const& bcast_op = get<0>(Impl::ops);
+    auto const& scale_op = get<0>(Impl::ops);
+    auto const& src_op = get<1>(Impl::ops);
     auto const& added_op = get<2>(Impl::ops);
-    return bcast_op.scalar != 0 || added_op.is_C_load_needed();
+    return (not scale_op.is_zero() && src_op.is_C_load_needed()) || added_op.is_C_load_needed();
   }
-
-  using Impl::Sm90VisitorImpl;
 
   template <class CallbacksImpl>
   struct ConsumerStoreCallbacks : CallbacksImpl {
@@ -334,34 +305,479 @@ struct Sm90TreeVisitor<
 
   template <
     bool ReferenceSrc, // do register tensors reference the src or dst layout of the tiled copy
-    class ProblemShapeMNKL,
-    class TileShapeMNK,
-    class TileCoordMNKL,
-    class EpilogueTile,
-    class TiledCopy,
-    class SrcTensor
+    class... Args
   >
   CUTLASS_DEVICE auto
-  get_consumer_store_callbacks(
-      ProblemShapeMNKL problem_shape_mnkl,
-      TileShapeMNK tile_shape_mnk,
-      TileCoordMNKL tile_coord_mnkl,
-      EpilogueTile epi_tile,
-      TiledCopy tiled_copy,
-      int thread_idx,
-      SrcTensor const& tCrC) {
-    return ConsumerStoreCallbacks(
-      is_C_load_needed(),
-      Impl::get_consumer_store_callbacks<ReferenceSrc>(
-        problem_shape_mnkl,
-        tile_shape_mnk,
-        tile_coord_mnkl,
-        epi_tile,
-        tiled_copy,
-        thread_idx,
-        tCrC
-      )
-    );
+  get_consumer_store_callbacks(ConsumerStoreArgs<Args...> const& args) {
+    auto callbacks_tuple = Impl::template get_consumer_store_callbacks<ReferenceSrc>(args);
+    return ConsumerStoreCallbacks<decltype(callbacks_tuple)>(
+        is_C_load_needed(), std::move(callbacks_tuple));
+  }
+};
+
+// ReLU with aux bit tensor dReLU/dZ
+// Aux(i) = Z(i) >= 0 ? 1 : 0
+namespace detail {
+// Placeholder node so we can retain standard EVT structure
+template <class StrideMNL>
+struct Sm90ReLUAuxStore : Sm90VisitorImpl<> {
+  struct SharedStorage {};
+
+  struct Arguments {
+    cutlass::uint1b_t* ptr_aux = nullptr;
+    StrideMNL dAux = {};
+  };
+
+  using Params = Arguments;
+
+  template <class ProblemShape>
+  static constexpr Params
+  to_underlying_arguments(ProblemShape const& problem_shape, Arguments const& args, void* workspace) {
+    return args;
+  }
+
+  template <class ProblemShape>
+  static size_t
+  get_workspace_size(ProblemShape const& problem_shape, Arguments const& args) {
+    return 0;
+  }
+
+  template <class ProblemShape>
+  static cutlass::Status
+  initialize_workspace(ProblemShape const& problem_shape, Arguments const& args, void* workspace, cudaStream_t stream,
+    CudaHostAdapter* cuda_adapter = nullptr) {
+    return cutlass::Status::kSuccess;
+  }
+
+  CUTLASS_HOST_DEVICE
+  Sm90ReLUAuxStore() { }
+
+  CUTLASS_HOST_DEVICE
+  Sm90ReLUAuxStore(Params const& params, SharedStorage const& shared_storage) { }
+};
+} // namespace detail
+
+// Specialization on the generic compute+aux EVT
+template <
+  // Compute node
+  template <class> class Activation,
+  class ElementOutput,
+  class ElementCompute,
+  FloatRoundStyle RoundStyle,
+  // Aux node
+  int Stages,
+  class EpilogueTile,
+  class StrideMNL,
+  class SmemLayoutAtom,
+  class CopyOpR2S,
+  int Alignment,
+  bool EnableNullptr,
+  // Input node
+  class InputOp
+>
+struct Sm90TreeVisitor<
+  Sm90Compute<Activation, ElementOutput, ElementCompute, RoundStyle,
+              cute::enable_if_t<cute::is_same_v<Activation<ElementCompute>, cutlass::epilogue::thread::ReLu<ElementCompute>> ||
+                                cute::is_same_v<Activation<ElementCompute>, cutlass::epilogue::thread::Clamp<ElementCompute>>  >>,
+  Sm90TreeVisitor<
+    Sm90AuxStore<
+      Stages,
+      EpilogueTile,
+      cutlass::uint1b_t,
+      RoundStyle,
+      StrideMNL,
+      SmemLayoutAtom,
+      CopyOpR2S,
+      Alignment,
+      EnableNullptr
+    >,
+    InputOp
+  >
+> : Sm90VisitorImpl<
+      Sm90VisitorImpl<
+        InputOp,
+        detail::Sm90ReLUAuxStore<StrideMNL>
+      >,
+      Sm90Compute<Activation, ElementOutput, ElementCompute, RoundStyle>
+    >
+{
+  using Impl =
+    Sm90VisitorImpl<
+      Sm90VisitorImpl<
+        InputOp,
+        detail::Sm90ReLUAuxStore<StrideMNL>
+      >,
+      Sm90Compute<Activation, ElementOutput, ElementCompute, RoundStyle>
+    >;
+  using Params = typename Impl::Params;
+  using SharedStorage = typename Impl::SharedStorage;
+
+  CUTLASS_HOST_DEVICE
+  Sm90TreeVisitor() {}
+
+  CUTLASS_HOST_DEVICE
+  Sm90TreeVisitor(Params const& params_, SharedStorage const& shared_storage)
+    : params(params_), Impl(params_, shared_storage) {}
+
+  Params const& params;
+
+  template <class RTensor, class GTensor, class CTensor, class ResidueMN, class CallbacksImpl>
+  struct ConsumerStoreCallbacks : CallbacksImpl {
+    CUTLASS_DEVICE
+    ConsumerStoreCallbacks(
+        RTensor&& tC_rAux,
+        GTensor&& tC_gAux,
+        CTensor tC_cAux,
+        ResidueMN residue_mn,
+        Params const& params,
+        CallbacksImpl&& impl)
+      : tC_rAux(cute::forward<RTensor>(tC_rAux)),
+        tC_gAux(cute::forward<GTensor>(tC_gAux)),
+        tC_cAux(tC_cAux),
+        residue_mn(residue_mn),
+        params(params),
+        CallbacksImpl(cute::forward<CallbacksImpl>(impl)) {}
+
+    RTensor tC_rAux;                                                                   // (CPY,CPY_M,CPY_N,EPI_M,EPI_N)
+    GTensor tC_gAux;                                                                   // (CPY,CPY_M,CPY_N,EPI_M,EPI_N)
+    CTensor tC_cAux;                                                                   // (CPY,CPY_M,CPY_N,EPI_M,EPI_N)
+    ResidueMN residue_mn;
+    Params const& params;
+
+    template <typename ElementAccumulator, int FragmentSize>
+    CUTLASS_DEVICE Array<ElementOutput, FragmentSize>
+    visit(Array<ElementAccumulator, FragmentSize> const& frg_acc, int epi_v, int epi_m, int epi_n) {
+      // Unpack callbacks + params
+      auto& [callbacks_input_aux, callbacks_compute] = CallbacksImpl::callbacks_tuple;
+      auto& [callbacks_input, callbacks_aux] = callbacks_input_aux.callbacks_tuple;
+      auto const& [params_input_aux, params_compute] = params;
+      auto const& [params_input, params_aux] = params_input_aux;
+
+      // Visit the input node
+      Array frg_input = callbacks_input.visit(frg_acc, epi_v, epi_m, epi_n);
+
+      // Compute activation + aux
+      using ElementInput = typename decltype(frg_input)::Element;
+      using ConvertInput = NumericArrayConverter<ElementCompute, ElementInput, FragmentSize, RoundStyle>;
+      using ConvertAux = PackPredicates<FragmentSize>;
+      using ComputeOutput = Activation<ElementCompute>;
+      using ConvertOutput = NumericArrayConverter<ElementOutput, ElementCompute, FragmentSize, RoundStyle>;
+      ConvertInput convert_input{};
+      ComputeOutput relu{};
+      ConvertAux convert_aux{};
+      ConvertOutput convert_output{};
+
+      Array frg_compute = convert_input(frg_input);
+      bool frg_aux[FragmentSize];
+      CUTLASS_PRAGMA_UNROLL
+      for (int i = 0; i < FragmentSize; ++i) {
+        ElementCompute pre_relu = frg_compute[i];
+        if constexpr (cute::is_same_v<Activation<ElementCompute>, cutlass::epilogue::thread::Clamp<ElementCompute>>) {
+          frg_compute[i] = relu(frg_compute[i], params_compute);
+        }
+        else {
+          frg_compute[i] = relu(frg_compute[i]);
+        }
+        frg_aux[i] = frg_compute[i] == pre_relu;
+      }
+
+      static_assert(FragmentSize % 8 == 0, "Predicate vector must be byte-aligned");
+      Tensor tC_rAux_frg = recast<typename ConvertAux::result_type>(coalesce(tC_rAux(_,_,_,epi_m,epi_n)));   // (EPI_V)
+      tC_rAux_frg(epi_v) = convert_aux(frg_aux);
+
+      return convert_output(frg_compute);
+    }
+
+    CUTLASS_DEVICE void
+    end() {
+      // Unpack callbacks + params
+      auto& [callbacks_input_aux, callbacks_compute] = CallbacksImpl::callbacks_tuple;
+      auto& [callbacks_input, callbacks_aux] = callbacks_input_aux.callbacks_tuple;
+      auto const& [params_input_aux, params_compute] = params;
+      auto const& [params_input, params_aux] = params_input_aux;
+
+      // Visit the input node
+      callbacks_input.end();
+
+      // Nullptr is no-op
+      if constexpr (EnableNullptr) {
+        if (params_aux.ptr_aux == nullptr) {
+          return;
+        }
+      }
+
+      // Copy vectorizes into byte-aligned stores
+      constexpr int V = cute::min(Alignment, decltype(max_common_vector(tC_rAux, tC_gAux))::value);
+      if constexpr (V > 0 && V % 8 == 0) {
+        using VecType = uint_bit_t<V>;
+        Tensor tC_rAux_vec = recast<VecType>(tC_rAux);
+        Tensor tC_gAux_vec = recast<VecType>(tC_gAux);
+        Tensor tC_cAux_vec = tC_cAux.compose(make_layout(Int<size(tC_rAux_vec)>{}, Int<V>{})); // only works if vector is logically sequential
+        auto predicate_fn = [&] (auto&&... coords) { return elem_less(tC_cAux_vec(coords...), residue_mn); };
+        copy_if(FunctionPredTensor(predicate_fn), tC_rAux_vec, tC_gAux_vec);
+      }
+      // sub-byte vectorization, must serialize threads
+      else {
+        // Assumes no inter-warp sharing of bytes (most copy layouts should satisfy this)
+        int lane_idx = canonical_lane_idx();
+        auto predicate_fn = [&] (auto&&... coords) { return elem_less(tC_cAux(coords...), residue_mn); };
+        CUTLASS_PRAGMA_NO_UNROLL
+        for (int i = 0; i < NumThreadsPerWarp; ++i) {
+          if (lane_idx == i) {
+            copy_if(FunctionPredTensor(predicate_fn), tC_rAux, tC_gAux);
+          }
+          __syncwarp();
+        }
+      }
+    }
+  };
+
+  template <
+    bool ReferenceSrc, // do register tensors reference the src or dst layout of the tiled copy
+    class... Args
+  >
+  CUTLASS_DEVICE auto
+  get_consumer_store_callbacks(ConsumerStoreArgs<Args...> const& args) {
+    // Unpack params
+    auto const& [params_input_aux, params_compute] = params;
+    auto const& [params_input, params_aux] = params_input_aux;
+
+    auto [M, N, K, L] = args.problem_shape_mnkl;
+    auto [m, n, k, l] = args.tile_coord_mnkl;
+    gmem_ptr ptr_aux = make_gmem_ptr(subbyte_iterator<cutlass::uint1b_t>(params_aux.ptr_aux));
+    Tensor mAux = make_tensor(ptr_aux, make_layout(make_shape(M,N,L), params_aux.dAux));                     // (M,N,L)
+    Tensor gAux = local_tile(mAux, take<0,2>(args.tile_shape_mnk), make_coord(m,n,l));                 // (CTA_M,CTA_N)
+
+    Tensor tC_gAux = sm90_partition_for_epilogue<ReferenceSrc>(                        // (CPY,CPY_M,CPY_N,EPI_M,EPI_N)
+                      gAux, args.epi_tile, args.tiled_copy, args.thread_idx);
+    Tensor tC_rAux = make_tensor<cutlass::uint1b_t>(shape(tC_gAux));                   // (CPY,CPY_M,CPY_N,EPI_M,EPI_N)
+
+    auto callbacks_impl = Impl::template get_consumer_store_callbacks<ReferenceSrc>(args);
+    return ConsumerStoreCallbacks<decltype(tC_rAux), decltype(tC_gAux), decltype(args.tCcD), decltype(args.residue_mn), decltype(callbacks_impl)>(
+        cute::move(tC_rAux), cute::move(tC_gAux), args.tCcD, args.residue_mn, params, cute::move(callbacks_impl));
+  }
+};
+
+// Aux load for uint1b_t
+template <
+  int Stages,
+  class EpilogueTile,
+  class StrideMNL,
+  class SmemLayoutAtom,
+  class CopyOpS2R,
+  int Alignment,
+  bool EnableNullptr
+>
+struct Sm90AuxLoad<
+  Stages,
+  EpilogueTile,
+  cutlass::uint1b_t,
+  StrideMNL,
+  SmemLayoutAtom,
+  CopyOpS2R,
+  Alignment,
+  EnableNullptr
+> {
+  static_assert(Alignment % 128 == 0, "sub-16B alignment not supported yet");
+
+  struct SharedStorage {};
+
+  struct Arguments {
+    cutlass::uint1b_t const* ptr_aux = nullptr;
+    cutlass::uint1b_t null_default = cutlass::uint1b_t(0);
+    StrideMNL dAux = {};
+  };
+
+  using Params = Arguments;
+
+  template <class ProblemShape>
+  static constexpr Params
+  to_underlying_arguments(ProblemShape const& problem_shape, Arguments const& args, void* workspace) {
+    return args;
+  }
+
+  template <class ProblemShape>
+  static size_t
+  get_workspace_size(ProblemShape const& problem_shape, Arguments const& args) {
+    return 0;
+  }
+
+  template <class ProblemShape>
+  static cutlass::Status
+  initialize_workspace(ProblemShape const& problem_shape, Arguments const& args, void* workspace, cudaStream_t stream,
+    CudaHostAdapter* cuda_adapter = nullptr) {
+    return cutlass::Status::kSuccess;
+  }
+
+  CUTLASS_HOST_DEVICE
+  Sm90AuxLoad() { }
+
+  CUTLASS_HOST_DEVICE
+  Sm90AuxLoad(Params const& params, SharedStorage const&)
+      : params(params) { }
+
+  Params const params;
+
+  CUTLASS_DEVICE bool
+  is_producer_load_needed() const {
+    return false;
+  }
+
+  CUTLASS_DEVICE bool
+  is_C_load_needed() const {
+    return false;
+  }
+
+  template <class... Args>
+  CUTLASS_DEVICE auto
+  get_producer_load_callbacks(ProducerLoadArgs<Args...> const& args) {
+    return EmptyProducerLoadCallbacks{};
+  }
+
+  template <class RTensor, class GTensor, class CTensor, class ResidueMN>
+  struct ConsumerStoreCallbacks : EmptyConsumerStoreCallbacks {
+    CUTLASS_DEVICE
+    ConsumerStoreCallbacks(RTensor&& tC_rAux_, GTensor&& tC_gAux_, CTensor tC_cAux_, ResidueMN residue_mn_, Params const& params_)
+      : tC_rAux(cute::forward<RTensor>(tC_rAux_)),
+        tC_gAux(cute::forward<GTensor>(tC_gAux_)),
+        tC_cAux(tC_cAux_),
+        residue_mn(residue_mn_),
+        params(params_) {}
+
+    RTensor tC_rAux;                                                                   // (CPY,CPY_M,CPY_N,{EPI_M,EPI_N})
+    GTensor tC_gAux;                                                                   // (CPY,CPY_M,CPY_N,EPI_M,EPI_N)
+    CTensor tC_cAux;                                                                   // (CPY,CPY_M,CPY_N,EPI_M,EPI_N)
+    ResidueMN residue_mn;
+    Params const& params;
+
+    CUTLASS_DEVICE void
+    begin() {
+      if constexpr (decltype(cute::rank(tC_rAux))::value == 5) {
+        if constexpr (EnableNullptr) {
+          if (params.ptr_aux == nullptr) {
+            return;
+          }
+        }
+
+        constexpr int V = cute::min(Alignment, decltype(max_common_vector(tC_rAux, tC_gAux))::value);
+        if constexpr (V > 0) {
+          using VecType = uint_bit_t<V>;
+          Tensor tC_gAux_vec = recast<VecType>(tC_gAux);
+          Tensor tC_rAux_vec = recast<VecType>(tC_rAux);
+          Tensor tC_cAux_vec = tC_cAux.compose(make_layout(Int<size(tC_rAux_vec)>{}, Int<V>{})); // only works if vector is logically sequential
+          auto predicate_fn = [&] (auto&&... coords) { return elem_less(tC_cAux_vec(coords...), residue_mn); };
+          copy_if(FunctionPredTensor(predicate_fn), tC_gAux_vec, tC_rAux_vec);
+        }
+        else {
+          auto predicate_fn = [&] (auto&&... coords) { return elem_less(tC_cAux(coords...), residue_mn); };
+          copy_if(FunctionPredTensor(predicate_fn), tC_gAux, tC_rAux);
+        }
+      }
+    }
+
+    CUTLASS_DEVICE void
+    previsit(int epi_m, int epi_n, int load_iteration, bool is_producer_load_needed) {
+      if constexpr (decltype(cute::rank(tC_rAux))::value == 3) {
+        if constexpr (EnableNullptr) {
+          if (params.ptr_aux == nullptr) {
+            return;
+          }
+        }
+
+        auto predicate_fn = [&] (auto&&... coords) { return elem_less(tC_cAux(_,_,_,epi_m,epi_n)(coords...), residue_mn); };
+        copy_if(FunctionPredTensor(predicate_fn), tC_gAux(_,_,_,epi_m,epi_n), tC_rAux);
+      }
+    }
+
+    template <typename ElementAccumulator, int FragmentSize>
+    CUTLASS_DEVICE auto
+    visit(Array<ElementAccumulator, FragmentSize> const& frg_acc, int epi_v, int epi_m, int epi_n) {
+      using ElementRegister = typename remove_cvref_t<RTensor>::value_type;
+      if constexpr (decltype(cute::rank(tC_rAux))::value == 3) {
+        return recast<Array<ElementRegister, FragmentSize>>(coalesce(tC_rAux))(epi_v);
+      }
+      else {
+        return recast<Array<ElementRegister, FragmentSize>>(coalesce(tC_rAux(_,_,_,epi_m,epi_n)))(epi_v);
+      }
+    }
+  };
+
+  template <
+    bool ReferenceSrc, // do register tensors reference the src or dst layout of the tiled copy
+    class... Args
+  >
+  CUTLASS_DEVICE auto
+  get_consumer_store_callbacks(ConsumerStoreArgs<Args...> const& args) {
+
+    auto [M, N, K, L] = args.problem_shape_mnkl;
+    auto [m, n, k, l] = args.tile_coord_mnkl;
+    gmem_ptr ptr_aux = make_gmem_ptr(subbyte_iterator<cutlass::uint1b_t const>(params.ptr_aux));
+    Tensor mAux = make_tensor(ptr_aux, make_layout(make_shape(M,N,L), params.dAux));                         // (M,N,L)
+    Tensor gAux = local_tile(mAux, take<0,2>(args.tile_shape_mnk), make_coord(m,n,l));                 // (CTA_M,CTA_N)
+
+    Tensor tC_gAux = sm90_partition_for_epilogue<ReferenceSrc>(                        // (CPY,CPY_M,CPY_N,EPI_M,EPI_N)
+                      gAux, args.epi_tile, args.tiled_copy, args.thread_idx);
+
+    // If byte-unaligned vectorization, store in registers as uint32_t to reduce redundant pack+unpack instruction sequences
+    constexpr int V = decltype(max_common_vector(tC_gAux.layout(), make_layout(tC_gAux.shape())))::value;
+    Tensor tC_rAux = [&] () {
+      if constexpr (V % 8 != 0) {
+        return make_tensor<uint32_t>(take<0,3>(shape(tC_gAux)));                       // (CPY,CPY_M,CPY_N)
+      } else {
+        return make_tensor<cutlass::uint1b_t>(shape(tC_gAux));                         // (CPY,CPY_M,CPY_N,EPI_M,EPI_N)
+      }
+    }();
+
+    if constexpr (EnableNullptr) {
+      if (params.ptr_aux == nullptr) {
+        fill(tC_rAux, params.null_default);
+      }
+    }
+
+    return ConsumerStoreCallbacks<decltype(tC_rAux), decltype(tC_gAux), decltype(args.tCcD), decltype(args.residue_mn)>(
+        cute::move(tC_rAux), cute::move(tC_gAux), args.tCcD, args.residue_mn, params);
+  }
+};
+
+// dReLU specialization
+template<
+  class ElementOutput,
+  class ElementCompute,
+  FloatRoundStyle RoundStyle
+>
+struct Sm90Compute<
+  cutlass::epilogue::thread::dReLU,
+  ElementOutput,
+  ElementCompute,
+  RoundStyle
+> : Sm90VisitorImpl<> {
+
+  using Sm90VisitorImpl<>::Sm90VisitorImpl;
+
+  struct ConsumerStoreCallbacks : EmptyConsumerStoreCallbacks {
+    template <typename ElementAccumulator, typename ElementInput, typename ElementAux, int FragmentSize>
+    CUTLASS_DEVICE Array<ElementOutput, FragmentSize>
+    visit(Array<ElementAccumulator, FragmentSize> const& frg_acc, int epi_v, int epi_m, int epi_n,
+          Array<ElementInput      , FragmentSize> const& frg_input,
+          Array<ElementAux        , FragmentSize> const& frg_aux) {
+      using ConvertInput = NumericArrayConverter<ElementCompute, ElementInput, FragmentSize, RoundStyle>;
+      using ComputeOutput = cutlass::epilogue::thread::dReLU<Array<ElementCompute, FragmentSize>>;
+      using ConvertOutput = NumericArrayConverter<ElementOutput, ElementCompute, FragmentSize, RoundStyle>;
+      ConvertInput convert_input{};
+      ComputeOutput compute_output{};
+      ConvertOutput convert_output{};
+
+      return convert_output(compute_output(convert_input(frg_input), frg_aux)); // don't convert frg_aux for dReLU
+    }
+  };
+
+  template <
+    bool ReferenceSrc, // do register tensors reference the src or dst layout of the tiled copy
+    class... Args
+  >
+  CUTLASS_DEVICE auto
+  get_consumer_store_callbacks(ConsumerStoreArgs<Args...> const& args) {
+    return ConsumerStoreCallbacks();
   }
 };
 

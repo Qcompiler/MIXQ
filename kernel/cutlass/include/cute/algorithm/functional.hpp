@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,6 +33,7 @@
 #include <cute/config.hpp>
 
 #include <cute/util/type_traits.hpp>
+#include <cute/numeric/complex.hpp>
 
 /** C++14 <functional> extensions */
 
@@ -46,7 +47,7 @@ struct identity {
   template <class T>
   CUTE_HOST_DEVICE constexpr
   decltype(auto) operator()(T&& arg) const {
-    return std::forward<T>(arg);
+    return static_cast<T&&>(arg);
   }
 };
 
@@ -69,7 +70,7 @@ struct constant_fn {
     template <class T>                                               \
     CUTE_HOST_DEVICE constexpr                                       \
     decltype(auto) operator()(T&& arg) const {                       \
-      return OP std::forward<T>(arg);                                \
+      return OP static_cast<T&&>(arg);                                \
     }                                                                \
   }
 #define CUTE_RIGHT_UNARY_OP(NAME,OP)                                 \
@@ -77,7 +78,7 @@ struct constant_fn {
     template <class T>                                               \
     CUTE_HOST_DEVICE constexpr                                       \
     decltype(auto) operator()(T&& arg) const {                       \
-      return std::forward<T>(arg) OP ;                               \
+      return static_cast<T&&>(arg) OP ;                               \
     }                                                                \
   }
 #define CUTE_NAMED_UNARY_OP(NAME,OP)                                 \
@@ -85,7 +86,7 @@ struct constant_fn {
     template <class T>                                               \
     CUTE_HOST_DEVICE constexpr                                       \
     decltype(auto) operator()(T&& arg) const {                       \
-      return OP (std::forward<T>(arg));                              \
+      return OP (static_cast<T&&>(arg));                              \
     }                                                                \
   }
 
@@ -108,6 +109,28 @@ CUTE_NAMED_UNARY_OP(conjugate, cute::conj);
 #undef CUTE_RIGHT_UNARY_OP
 #undef CUTE_NAMED_UNARY_OP
 
+template <int Shift_>
+struct shift_right_const {
+  static constexpr int Shift = Shift_;
+
+  template <class T>
+  CUTE_HOST_DEVICE constexpr
+  decltype(auto) operator()(T&& arg) const {
+    return static_cast<T&&>(arg) >> Shift;
+  }
+};
+
+template <int Shift_>
+struct shift_left_const {
+  static constexpr int Shift = Shift_;
+
+  template <class T>
+  CUTE_HOST_DEVICE constexpr
+  decltype(auto) operator()(T&& arg) const {
+    return static_cast<T&&>(arg) << Shift;
+  }
+};
+
 /************/
 /** Binary **/
 /************/
@@ -117,7 +140,7 @@ CUTE_NAMED_UNARY_OP(conjugate, cute::conj);
     template <class T, class U>                                      \
     CUTE_HOST_DEVICE constexpr                                       \
     decltype(auto) operator()(T&& lhs, U&& rhs) const {              \
-      return std::forward<T>(lhs) OP std::forward<U>(rhs);           \
+      return static_cast<T&&>(lhs) OP static_cast<U&&>(rhs);           \
     }                                                                \
   }
 #define CUTE_NAMED_BINARY_OP(NAME,OP)                                \
@@ -125,7 +148,7 @@ CUTE_NAMED_UNARY_OP(conjugate, cute::conj);
     template <class T, class U>                                      \
     CUTE_HOST_DEVICE constexpr                                       \
     decltype(auto) operator()(T&& lhs, U&& rhs) const {              \
-      return OP (std::forward<T>(lhs), std::forward<U>(rhs));        \
+      return OP (static_cast<T&&>(lhs), static_cast<U&&>(rhs));        \
     }                                                                \
   }
 
@@ -171,6 +194,76 @@ CUTE_NAMED_BINARY_OP(min_fn, cute::min);
 #undef CUTE_NAMED_BINARY_OP
 
 /**********/
+/** Fold **/
+/**********/
+
+#define CUTE_FOLD_OP(NAME,OP)                                        \
+  struct NAME##_unary_rfold {                                        \
+    template <class... T>                                            \
+    CUTE_HOST_DEVICE constexpr                                       \
+    auto operator()(T&&... t) const {                                \
+      return (t OP ...);                                             \
+    }                                                                \
+  };                                                                 \
+  struct NAME##_unary_lfold {                                        \
+    template <class... T>                                            \
+    CUTE_HOST_DEVICE constexpr                                       \
+    auto operator()(T&&... t) const {                                \
+      return (... OP t);                                             \
+    }                                                                \
+  };                                                                 \
+  struct NAME##_binary_rfold {                                       \
+    template <class U, class... T>                                   \
+    CUTE_HOST_DEVICE constexpr                                       \
+    auto operator()(U&& u, T&&... t) const {                         \
+      return (t OP ... OP u);                                        \
+    }                                                                \
+  };                                                                 \
+  struct NAME##_binary_lfold {                                       \
+    template <class U, class... T>                                   \
+    CUTE_HOST_DEVICE constexpr                                       \
+    auto operator()(U&& u, T&&... t) const {                         \
+      return (u OP ... OP t);                                        \
+    }                                                                \
+  }
+
+CUTE_FOLD_OP(plus,                 +);
+CUTE_FOLD_OP(minus,                -);
+CUTE_FOLD_OP(multiplies,           *);
+CUTE_FOLD_OP(divides,              /);
+CUTE_FOLD_OP(modulus,              %);
+
+CUTE_FOLD_OP(plus_assign,         +=);
+CUTE_FOLD_OP(minus_assign,        -=);
+CUTE_FOLD_OP(multiplies_assign,   *=);
+CUTE_FOLD_OP(divides_assign,      /=);
+CUTE_FOLD_OP(modulus_assign,      %=);
+
+CUTE_FOLD_OP(bit_and,              &);
+CUTE_FOLD_OP(bit_or,               |);
+CUTE_FOLD_OP(bit_xor,              ^);
+CUTE_FOLD_OP(left_shift,          <<);
+CUTE_FOLD_OP(right_shift,         >>);
+
+CUTE_FOLD_OP(bit_and_assign,      &=);
+CUTE_FOLD_OP(bit_or_assign,       |=);
+CUTE_FOLD_OP(bit_xor_assign,      ^=);
+CUTE_FOLD_OP(left_shift_assign,  <<=);
+CUTE_FOLD_OP(right_shift_assign, >>=);
+
+CUTE_FOLD_OP(logical_and,         &&);
+CUTE_FOLD_OP(logical_or,          ||);
+
+CUTE_FOLD_OP(equal_to,            ==);
+CUTE_FOLD_OP(not_equal_to,        !=);
+CUTE_FOLD_OP(greater,              >);
+CUTE_FOLD_OP(less,                 <);
+CUTE_FOLD_OP(greater_equal,       >=);
+CUTE_FOLD_OP(less_equal,          <=);
+
+#undef CUTE_FOLD_OP
+
+/**********/
 /** Meta **/
 /**********/
 
@@ -181,7 +274,7 @@ struct bound_fn {
   CUTE_HOST_DEVICE constexpr
   decltype(auto)
   operator()(T&& arg) {
-    return fn_(arg_, std::forward<T>(arg));
+    return fn_(arg_, static_cast<T&&>(arg));
   }
 
   Fn fn_;

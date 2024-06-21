@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -41,6 +41,8 @@
 #include "cutlass/device_kernel.h"
 #include "cutlass/gemm/gemm.h"
 #include "cutlass/detail/layout.hpp"
+#include "cutlass/detail/mma.hpp"
+#include "cutlass/cuda_host_adapter.hpp"
 
 #if !defined(__CUDACC_RTC__)
 #include "cutlass/cluster_launch.hpp"
@@ -51,6 +53,7 @@
 #include "cutlass/gemm/device/gemm_universal_base.h"
 #include "cutlass/gemm/kernel/gemm_transpose_operands.h"
 #include "cutlass/gemm/threadblock/threadblock_swizzle.h"
+#include "cutlass/epilogue/threadblock/epilogue_with_visitor_callbacks.h"
 
 // 3.x
 #include "cutlass/gemm/kernel/gemm_universal.hpp"
@@ -93,7 +96,7 @@ public:
   using ElementB = typename GemmKernel::ElementB;
   using ElementC = typename GemmKernel::ElementC;
   using ElementD = typename GemmKernel::ElementD;
-  using ElementAccumulator = typename GemmKernel::TiledMma::ValTypeC;
+  using ElementAccumulator = typename GemmKernel::ElementAccumulator;
   using DispatchPolicy = typename GemmKernel::DispatchPolicy;
   using CollectiveMainloop = typename GemmKernel::CollectiveMainloop;
   using CollectiveEpilogue = typename GemmKernel::CollectiveEpilogue;
@@ -104,17 +107,17 @@ public:
   using LayoutC = gemm::detail::StrideToLayoutTagC_t<typename GemmKernel::StrideC>;
   using LayoutD = gemm::detail::StrideToLayoutTagC_t<typename GemmKernel::StrideD>;
 
-  // NOTE: 3.0 kernels do not support complex transforms for now ...
-  static ComplexTransform const kTransformA = ComplexTransform::kNone;
-  static ComplexTransform const kTransformB = ComplexTransform::kNone;
+  static bool const kEnableCudaHostAdapter = CUTLASS_ENABLE_CUDA_HOST_ADAPTER;
+
+  static ComplexTransform const kTransformA = cute::is_same_v<typename GemmKernel::CollectiveMainloop::TransformA, cute::conjugate> ?
+                                              ComplexTransform::kConjugate : ComplexTransform::kNone;
+  static ComplexTransform const kTransformB = cute::is_same_v<typename GemmKernel::CollectiveMainloop::TransformB, cute::conjugate> ?
+                                              ComplexTransform::kConjugate : ComplexTransform::kNone;
 
   // Legacy: Assume MultiplyAdd only since we do not use this tag type in 3.0
   using MathOperator = cutlass::arch::OpMultiplyAdd;
 
-  // All tensorop operations have atom shape's M >= 8
-  using OperatorClass = cute::conditional_t<
-        cute::size<0>(typename CollectiveMainloop::TiledMma::AtomShape_MNK{}) >= 8,
-        cutlass::arch::OpClassTensorOp, cutlass::arch::OpClassSimt>;
+  using OperatorClass = cutlass::detail::get_operator_class_t<typename CollectiveMainloop::TiledMma>;
 
   using ArchTag = typename GemmKernel::ArchTag;
 
@@ -142,25 +145,25 @@ public:
   static int const kThreadCount = GemmKernel::MaxThreadsPerBlock;
 
   // Warp shape is not a primary API type in 3.x
-  // But we can best approximate it by inspecting the TiledMma::TiledShape_MNK
+  // But we can best approximate it by inspecting the TiledMma
   // For this, we make the assumption that we always have 4 warps along M, and rest along N, none along K
   // We also always round up the warp count to 4 if the tiled mma is smaller than 128 threads
-  static constexpr int WarpsInMma = cute::max(4, cute::size(typename GemmKernel::TiledMma{}) / 32);
+  static constexpr int WarpsInMma = cute::max(4, CUTE_STATIC_V(cute::size(typename GemmKernel::TiledMma{})) / 32);
   static constexpr int WarpsInMmaM = 4;
   static constexpr int WarpsInMmaN = cute::ceil_div(WarpsInMma, WarpsInMmaM);
   using WarpCount = cutlass::gemm::GemmShape<WarpsInMmaM, WarpsInMmaN, 1>;
   using WarpShape = cutlass::gemm::GemmShape<
-      cute::size<0>(typename CollectiveMainloop::TiledMma::TiledShape_MNK{}) / WarpsInMmaM,
-      cute::size<1>(typename CollectiveMainloop::TiledMma::TiledShape_MNK{}) / WarpsInMmaN,
-      cute::size<2>(typename CollectiveMainloop::TiledMma::TiledShape_MNK{})>;
+      CUTE_STATIC_V(cute::tile_size<0>(typename CollectiveMainloop::TiledMma{})) / WarpsInMmaM,
+      CUTE_STATIC_V(cute::tile_size<1>(typename CollectiveMainloop::TiledMma{})) / WarpsInMmaN,
+      CUTE_STATIC_V(cute::tile_size<2>(typename CollectiveMainloop::TiledMma{}))>;
 
   static int constexpr kStages = CollectiveMainloop::DispatchPolicy::Stages;
 
   // Inspect TiledCopy for A and B to compute the alignment size
   static int constexpr kAlignmentA = cutlass::detail::get_alignment_count_from_gmem_tiled_copy<
-      typename CollectiveMainloop::GmemTiledCopyA, ElementA>();
+      typename CollectiveMainloop::GmemTiledCopyA, ElementA, typename CollectiveMainloop::TiledMma::ValTypeA>();
   static int constexpr kAlignmentB = cutlass::detail::get_alignment_count_from_gmem_tiled_copy<
-      typename CollectiveMainloop::GmemTiledCopyB, ElementB>();
+      typename CollectiveMainloop::GmemTiledCopyB, ElementB, typename CollectiveMainloop::TiledMma::ValTypeB>();
   static int constexpr kAlignmentC = cutlass::detail::get_alignment_count_from_gmem_tiled_copy<
       typename CollectiveEpilogue::GmemTiledCopyC, ElementC>();
   static int constexpr kAlignmentD = cutlass::detail::get_alignment_count_from_gmem_tiled_copy<
@@ -271,31 +274,46 @@ public:
 
   /// Initializes GEMM state from arguments.
   Status
-  initialize(Arguments const& args, void* workspace = nullptr, cudaStream_t stream = nullptr) {
+  initialize(
+    Arguments const& args,
+    void* workspace = nullptr,
+    cudaStream_t stream = nullptr,
+    CudaHostAdapter* cuda_adapter = nullptr) {
+
     CUTLASS_TRACE_HOST("GemmUniversal::initialize() - workspace "
       << workspace << ", stream: " << (stream ? "non-null" : "null"));
 
     // Initialize the workspace
-    Status status = GemmKernel::initialize_workspace(args, workspace, stream);
+    Status status = GemmKernel::initialize_workspace(args, workspace, stream, cuda_adapter);
     if (status != Status::kSuccess) {
       return status;
     }
-
     // Initialize the Params structure
     params_ = GemmKernel::to_underlying_arguments(args, workspace);
+    // Don't set the function attributes - require the CudaHostAdapter to set it.
+    if constexpr (kEnableCudaHostAdapter) {
+      CUTLASS_ASSERT(cuda_adapter);
+      return Status::kSuccess;
+    }
+    else {
+      //
+      // Account for dynamic smem capacity if needed
+      //
+      int smem_size = GemmKernel::SharedStorageSize;
 
-    // account for dynamic smem capacity if needed
-    int smem_size = GemmKernel::SharedStorageSize;
-    if (smem_size >= (48 << 10)) {
-      CUTLASS_TRACE_HOST("  Setting smem size to " << smem_size);
-      cudaError_t result = cudaFuncSetAttribute(
-          device_kernel<GemmKernel>,
-          cudaFuncAttributeMaxDynamicSharedMemorySize,
-          smem_size);
-      if (cudaSuccess != result) {
-        result = cudaGetLastError(); // to clear the error bit
-        CUTLASS_TRACE_HOST("  cudaFuncSetAttribute() returned error: " << cudaGetErrorString(result));
-        return Status::kErrorInternal;
+      CUTLASS_ASSERT(cuda_adapter == nullptr);
+
+      if (smem_size >= (48 << 10)) {
+        CUTLASS_TRACE_HOST("  Setting smem size to " << smem_size);
+        cudaError_t result = cudaFuncSetAttribute(
+            device_kernel<GemmKernel>,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            smem_size);
+        if (cudaSuccess != result) {
+          result = cudaGetLastError(); // to clear the error bit
+          CUTLASS_TRACE_HOST("  cudaFuncSetAttribute() returned error: " << cudaGetErrorString(result));
+          return Status::kErrorInternal;
+        }
       }
     }
     return Status::kSuccess;
@@ -318,7 +336,9 @@ public:
   /// Primary run() entry point API that is static allowing users to create and manage their own params.
   /// Supplied params struct must be construct by calling GemmKernel::to_underling_arguments()
   static Status
-  run(Params& params, cudaStream_t stream = nullptr) {
+  run(Params& params,
+      cudaStream_t stream = nullptr,
+      CudaHostAdapter *cuda_adapter = nullptr) {
     CUTLASS_TRACE_HOST("GemmUniversal::run()");
     dim3 const block = GemmKernel::get_block_shape();
     dim3 const grid = get_grid_shape(params);
@@ -326,19 +346,62 @@ public:
     // configure smem size and carveout
     int smem_size = GemmKernel::SharedStorageSize;
 
-    Status launch_result;
+    Status launch_result{ Status::kSuccess };
     // Use extended launch API only for mainloops that use it
-    if constexpr(GemmKernel::ArchTag::kMinComputeCapability >= 90) {
+    if constexpr (GemmKernel::ArchTag::kMinComputeCapability >= 90) {
       dim3 cluster(cute::size<0>(typename GemmKernel::DispatchPolicy::ClusterShape{}),
                    cute::size<1>(typename GemmKernel::DispatchPolicy::ClusterShape{}),
                    cute::size<2>(typename GemmKernel::DispatchPolicy::ClusterShape{}));
-      void const* kernel = (void const*) device_kernel<GemmKernel>;
       void* kernel_params[] = {&params};
-      launch_result = ClusterLauncher::launch(grid, cluster, block, smem_size, stream, kernel, kernel_params);
+
+      if constexpr (kEnableCudaHostAdapter) {
+        //
+        // Use the cuda host adapter
+        //
+        CUTLASS_ASSERT(cuda_adapter);
+        if (cuda_adapter) {
+
+          launch_result = cuda_adapter->launch(grid,
+                                               cluster,
+                                               block,
+                                               smem_size,
+                                               stream,
+                                               kernel_params,
+                                               0);
+        }
+        else {
+          return Status::kErrorInternal;
+        }
+      }
+      else {
+        CUTLASS_ASSERT(cuda_adapter == nullptr);
+        void const* kernel = (void const*) device_kernel<GemmKernel>;
+        if constexpr (GemmKernel::ArchTag::kMinComputeCapability == 90) {
+          launch_result = ClusterLauncher::launch(
+            grid, cluster, block, smem_size, stream, kernel, kernel_params);
+        }
+      }
     }
     else {
       launch_result = Status::kSuccess;
-      device_kernel<GemmKernel><<<grid, block, smem_size, stream>>>(params);
+      if constexpr (kEnableCudaHostAdapter) {
+        CUTLASS_ASSERT(cuda_adapter);
+        if (cuda_adapter) {
+          void* kernel_params[] = {&params};
+
+          launch_result = cuda_adapter->launch(
+            grid, block, smem_size, stream, kernel_params, 0
+          );
+
+        }
+        else {
+          return Status::kErrorInternal;
+        }
+      }
+      else {
+        CUTLASS_ASSERT(cuda_adapter == nullptr);
+        device_kernel<GemmKernel><<<grid, block, smem_size, stream>>>(params);
+      }
     }
 
     cudaError_t result = cudaGetLastError();
@@ -357,30 +420,40 @@ public:
 
   /// Launches the kernel after first constructing Params internal state from supplied arguments.
   Status
-  run(Arguments const& args, void* workspace = nullptr, cudaStream_t stream = nullptr) {
-    Status status = initialize(args, workspace, stream);
+  run(
+    Arguments const& args,
+    void* workspace = nullptr,
+    cudaStream_t stream = nullptr,
+    CudaHostAdapter *cuda_adapter = nullptr
+  ) {
+    Status status = initialize(args, workspace, stream, cuda_adapter);
+
     if (Status::kSuccess == status) {
-      status = run(params_, stream);
+      status = run(params_, stream, cuda_adapter);
     }
     return status;
   }
 
   /// Launches the kernel after first constructing Params internal state from supplied arguments.
   Status
-  operator()(Arguments const& args, void* workspace = nullptr, cudaStream_t stream = nullptr) {
-    return run(args, workspace, stream);
+  operator()(
+    Arguments const& args,
+    void* workspace = nullptr,
+    cudaStream_t stream = nullptr,
+    CudaHostAdapter *cuda_adapter = nullptr) {
+    return run(args, workspace, stream, cuda_adapter);
   }
 
   /// Overload that allows a user to re-launch the same kernel without updating internal params struct.
   Status
-  run(cudaStream_t stream = nullptr) {
-    return run(params_, stream);
+  run(cudaStream_t stream = nullptr, CudaHostAdapter *cuda_adapter = nullptr) {
+    return run(params_, stream, cuda_adapter);
   }
 
   /// Overload that allows a user to re-launch the same kernel without updating internal params struct.
   Status
-  operator()(cudaStream_t stream = nullptr) {
-    return run(params_, stream);
+  operator()(cudaStream_t stream = nullptr, CudaHostAdapter *cuda_adapter = nullptr) {
+    return run(params_, stream, cuda_adapter);
   }
 };
 
@@ -388,7 +461,7 @@ public:
 ////////////////////////////// CUTLASS 2.x API /////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename GemmKernel_>
+template <class GemmKernel_>
 class GemmUniversalAdapter<
   GemmKernel_,
   cute::enable_if_t<not gemm::detail::IsCutlass3GemmKernel<GemmKernel_>::value>>
@@ -398,6 +471,7 @@ public:
   using GemmKernel = GemmKernel_;
 
   static bool const kInternalTranspose =
+    !cutlass::epilogue::threadblock::detail::is_2x_evt_v<typename GemmKernel::Epilogue> &&  // 2.x EVT does not require internal transpose
     cute::is_same<typename GemmKernel::LayoutC, cutlass::layout::RowMajor>::value;
 
   using ThreadblockShape = typename GemmKernel::Mma::Shape;
@@ -479,15 +553,15 @@ public:
   }
 
   /// Determines whether the GEMM can execute the given problem.
-  static Status can_implement(Arguments const &args) {
+  static Status can_implement(Arguments const &args, CudaHostAdapter *cuda_adapter = nullptr) {
 
-    return UnderlyingOperator::can_implement(to_underlying_arguments(args));
+    return UnderlyingOperator::can_implement(to_underlying_arguments(args), cuda_adapter);
   }
 
   /// Gets the workspace size
-  static size_t get_workspace_size(Arguments const &args) {
+  static size_t get_workspace_size(Arguments const &args, CudaHostAdapter *cuda_adapter = nullptr) {
 
-    return UnderlyingOperator::get_workspace_size(to_underlying_arguments(args));
+    return UnderlyingOperator::get_workspace_size(to_underlying_arguments(args), cuda_adapter);
   }
 
   /// Computes the grid shape
@@ -501,9 +575,14 @@ public:
   }
 
   /// Initializes GEMM state from arguments.
-  Status initialize(Arguments const &args, void *workspace = nullptr, cudaStream_t stream = nullptr) {
+  Status initialize(
+    Arguments const &args,
+    void *workspace = nullptr,
+    cudaStream_t stream = nullptr,
+    CudaHostAdapter *cuda_adapter = nullptr
+  ) {
 
-    return underlying_operator_.initialize(to_underlying_arguments(args), workspace, stream);
+    return underlying_operator_.initialize(to_underlying_arguments(args), workspace, stream, cuda_adapter);
   }
 
   /// Lightweight update given a subset of arguments.
@@ -513,13 +592,18 @@ public:
   }
 
   /// Runs the kernel using initialized state.
-  Status run(cudaStream_t stream = nullptr) {
+  Status run(
+    cudaStream_t stream = nullptr,
+    CudaHostAdapter *cuda_adapter = nullptr) {
 
-    return underlying_operator_.run(stream);
+    return underlying_operator_.run(stream, cuda_adapter);
   }
 
   /// Runs the kernel using initialized state.
-  Status operator()(cudaStream_t stream = nullptr) {
+  Status operator()(
+    cudaStream_t stream = nullptr,
+    CudaHostAdapter *cuda_adapter = nullptr) {
+
     return run(stream);
   }
 
@@ -527,12 +611,13 @@ public:
   Status operator()(
     Arguments const &args,
     void *workspace = nullptr,
-    cudaStream_t stream = nullptr) {
+    cudaStream_t stream = nullptr,
+    CudaHostAdapter *cuda_adapter = nullptr) {
 
-    Status status = initialize(args, workspace, stream);
+    Status status = initialize(args, workspace, stream, cuda_adapter);
 
     if (status == Status::kSuccess) {
-      status = run(stream);
+      status = run(stream, cuda_adapter);
     }
 
     return status;

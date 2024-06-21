@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -258,7 +258,7 @@ private:
     ComputeFragment identity_frag;
 
     CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < identity_frag.size(); ++i) {
+    for (int i = 0; i < int(identity_frag.size()); ++i) {
       identity_frag[i] = params.reduction_identity;
     }
 
@@ -536,7 +536,7 @@ private:
     ComputeFragment identity_frag;
     
     CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < identity_frag.size(); ++i) {
+    for (int i = 0; i < int(identity_frag.size()); ++i) {
       identity_frag[i] = params.reduction_identity;
     }
 

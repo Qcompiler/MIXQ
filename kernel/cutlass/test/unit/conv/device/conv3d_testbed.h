@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -55,7 +55,7 @@
 #include "conv3d_problems.h"
 #include "cutlass/core_io.h"
 
-#include "cache_testbed_output.h"
+#include "../cache_testbed_output.h"
 
 namespace test {
 namespace conv {
@@ -169,7 +169,7 @@ public:
     tensor_D_reference.resize(implicit_gemm_tensor_c_extent(kConvolutionalOperator, problem_size));
 
     initialize_tensor(tensor_A.host_view(), init_A, seed); 
-    initialize_tensor(tensor_B.host_view(), init_B, seed * 17); 
+    initialize_tensor(tensor_B.host_view(), init_B, seed * 17);
     initialize_tensor(tensor_C.host_view(), init_C, seed * 39);
 
     tensor_A.sync_device();
@@ -184,7 +184,7 @@ public:
     // Determine SMEM requirements and waive if not satisfied
     //
 
-    int smem_size = int(sizeof(typename Conv3d::UnderlyingKernel::SharedStorage));
+    size_t smem_size = sizeof(typename Conv3d::UnderlyingKernel::SharedStorage);
 
     cudaDeviceProp properties;
     int device_idx;
@@ -358,12 +358,12 @@ public:
     bool cached_result_loaded = false;
     CachedTestResult cached_test_result;
 
-    std::string conv2d_result_cache_name = 
+    std::string conv3d_result_cache_name =
       std::string("cached_results_") + CUTLASS_TARGET_NAME + ".txt";
-    
+
     if (CUTLASS_TEST_ENABLE_CACHED_RESULTS) {
 
-      CachedTestResultListing cached_results(conv2d_result_cache_name);
+      CachedTestResultListing cached_results(conv3d_result_cache_name);
 
       auto cached = cached_results.find(cached_test_key);
 
@@ -376,7 +376,7 @@ public:
     if (!cached_result_loaded) {
 
 #if CUTLASS_CONV_TEST_UNIT_REFERENCE_DEVICE_ENABLED
-    
+
     cutlass::reference::device::Conv3d<
       ElementA,
       LayoutA,
@@ -426,15 +426,14 @@ public:
 
         cached_test_result.D = TensorHash(tensor_D_reference.host_view());
 
-        CachedTestResultListing cached_results(conv2d_result_cache_name);
+        CachedTestResultListing cached_results(conv3d_result_cache_name);
 
         cached_results.append(cached_test_key, cached_test_result);
-        cached_results.write(conv2d_result_cache_name);
+        cached_results.write(conv3d_result_cache_name);
       }
     } // if (!cached_result_loaded)
 
     uint32_t tensor_D_hash = TensorHash(tensor_D_computed.host_view());
-    
     if (CUTLASS_TEST_ENABLE_CACHED_RESULTS) {
       passed = (tensor_D_hash == cached_test_result.D);
 
@@ -456,7 +455,8 @@ public:
       fname << "error_Conv3d_ImplicitGemm_device_"
         << (split_k_mode == cutlass::conv::SplitKMode::kSerial ? "serial_reduction_" : "parallel_reduction_")
         << (Conv3d::kConvolutionalOperator == cutlass::conv::Operator::kFprop ? "fprop_" :
-            (Conv3d::kConvolutionalOperator == cutlass::conv::Operator::kDgrad ? "dgrad_" : "wgrad_")) 
+            (Conv3d::kConvolutionalOperator == cutlass::conv::Operator::kDgrad ? "dgrad_" :
+              (Conv3d::kConvolutionalOperator == cutlass::conv::Operator::kDeconv ? "deconv_" : "wgrad_")))
         << "ndhwc_"
         << problem_size.N << "x"
         << problem_size.D << "x"
@@ -571,8 +571,8 @@ bool TestAllConv3d(
       //
   
       // CUTLASS DGRAD's unity stride specialization only support stride {1, 1, 1} 
-      if ((ImplicitGemm::kConvolutionalOperator == 
-            cutlass::conv::Operator::kDgrad) && 
+      if ((ImplicitGemm::kConvolutionalOperator == cutlass::conv::Operator::kDgrad ||
+            ImplicitGemm::kConvolutionalOperator == cutlass::conv::Operator::kDeconv) &&
           ((ImplicitGemm::UnderlyingKernel::Mma::IteratorA::kStrideSupport == 
             cutlass::conv::StrideSupport::kUnity) ||
            (ImplicitGemm::UnderlyingKernel::Mma::IteratorB::kStrideSupport == 
@@ -613,7 +613,7 @@ bool TestAllConv3d(
 
   // Sweep split-k-slice using serial reduction with non-unity alpha and non-zero beta for 
   // a single conv2d problem size. Convolution unit tests take a long time to run so only sweep parameters 
-  // which are abolutely neccessary to catch functional bugs. The below code does provide option to sweep 
+  // which are abolutely necessary to catch functional bugs. The below code does provide option to sweep
   // alpha and beta for local testing, but only runs one value for alpha and beta.
   cutlass::conv::Conv3dProblemSize conv3d_split_k_test_size (
     {1, 8, 8, 8, 32},            // input size  (NDHWC)
@@ -660,6 +660,47 @@ bool TestAllConv3d(
   }
 
   return passed;
+}
+
+template <typename ImplicitGemm>
+bool TestSpecificConv3d(
+  const Conv3dProblemVector & problem_sizes) {
+
+  bool passed = true;
+
+  //
+  // Testbed object
+  //
+
+  TestbedConv3d<ImplicitGemm> testbed;
+
+  // Sweep conv3d problem sizes (split-k-mode=kSerial, split-k-slice=1, alpha=1.0, beta=0.0)
+  for(auto conv_problem : problem_sizes) {
+
+    //
+    // Test
+    //
+
+    // test mode = xcross
+    passed = testbed.run(
+      conv_problem,
+      cutlass::conv::SplitKMode::kSerial);
+
+    if (!passed) {
+      return false;
+    }
+
+    // test mode = convolution
+    passed = testbed.run(
+      conv_problem.reset_mode(cutlass::conv::Mode::kConvolution),
+      cutlass::conv::SplitKMode::kSerial);
+
+    if (!passed) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////

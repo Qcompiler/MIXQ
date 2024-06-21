@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -61,7 +61,7 @@ ComputeType TensorTransformReduce(
   TransformOp transform
 ) {
 
-  for (int64_t idx = 0; idx < view.size(); ++idx) {
+  for (int64_t idx = 0; idx < int64_t(view.size()); ++idx) {
     typename Layout::TensorCoord coord;
     cutlass::reference::detail::LinearToCoordinate<Layout::kRank>()(coord, idx, view.extent());
 
@@ -94,7 +94,7 @@ ComputeType TensorTransformReduce(
     throw std::runtime_error("Tensor extents must match.");
   }
 
-  for (int64_t idx = 0; idx < view_A.size(); ++idx) {
+  for (int64_t idx = 0; idx < int64_t(view_A.size()); ++idx) {
 
     typename Layout::TensorCoord coord;
     cutlass::reference::detail::LinearToCoordinate<Layout::kRank>()(coord, idx, view_A.extent());

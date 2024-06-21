@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -165,7 +165,7 @@ struct DefaultRankKUniversal<
   SplitKSerial,
   Operator,
   BlasMode::kSymmetric,
-  typename std::enable_if< ! cutlass::is_complex<ElementAccumulator>::value>::type
+  typename platform::enable_if< ! cutlass::is_complex<ElementAccumulator>::value>::type
 > {
 
   using DefaultRankKkernel = typename kernel::DefaultRankK<
@@ -265,7 +265,7 @@ struct DefaultRankKUniversal<
   SplitKSerial,
   Operator,
   kBlasMode,
-  typename std::enable_if<cutlass::is_complex<ElementAccumulator>::value>::type
+  typename platform::enable_if<cutlass::is_complex<ElementAccumulator>::value>::type
 > {
 
   using DefaultRankKkernel = typename kernel::DefaultRankKComplex<

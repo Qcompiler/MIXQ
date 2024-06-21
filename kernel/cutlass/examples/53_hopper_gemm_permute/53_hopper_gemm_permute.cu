@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -109,6 +109,8 @@
 namespace example
 {
 
+#if defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
+
 struct Options {
 
   bool help;
@@ -197,14 +199,14 @@ template<class ... Shapes>
 auto
 select_mode_shape(Shapes const & ... shapes) {
   auto permuted_shapes = filter_tuple(cute::make_tuple(shapes...), [](auto shape) {
-    if constexpr (rank(shape) > 1) {
+    if constexpr (cute::rank(shape) > 1) {
       return cute::make_tuple(shape);
     }
     else {
       return cute::make_tuple();
     }
   });
-  if constexpr (rank(permuted_shapes) == 0) {
+  if constexpr (cute::rank(permuted_shapes) == 0) {
     return get<0>(cute::make_tuple(shapes...));
   }
   else {
@@ -251,7 +253,7 @@ auto
 select_tile_shape(TileSize size, Shape const& shape)
 {
   static_assert(is_static<TileSize>::value, "Tile size must be static");
-  if constexpr (rank(Shape{}) == 0) {
+  if constexpr (cute::rank(Shape{}) == 0) {
     return cute::make_tuple(size);
   }
   else {
@@ -391,7 +393,8 @@ private:
     ElementB, StrideB, 128 / cutlass::sizeof_bits<ElementB>::value,
     ElementAccumulator,
     TileShape, ClusterShape,
-    cutlass::gemm::collective::StageCountAutoCarveout<sizeof(typename CollectiveEpilogue::SharedStorage)>,
+    cutlass::gemm::collective::StageCountAutoCarveout<
+      static_cast<int>(sizeof(typename CollectiveEpilogue::SharedStorage))>,
     cutlass::gemm::collective::KernelScheduleAuto
   >::CollectiveOp;
 
@@ -401,7 +404,8 @@ private:
     ElementB, StrideBPermute, 128 / cutlass::sizeof_bits<ElementB>::value,
     ElementAccumulator,
     TileShapePermute, ClusterShape,
-    cutlass::gemm::collective::StageCountAutoCarveout<sizeof(typename CollectiveEpiloguePermute::SharedStorage)>,
+    cutlass::gemm::collective::StageCountAutoCarveout<
+      static_cast<int>(sizeof(typename CollectiveEpiloguePermute::SharedStorage))>,
     cutlass::gemm::collective::KernelScheduleAuto
   >::CollectiveOp;
 
@@ -724,6 +728,7 @@ private:
     return true;
   }
 };
+#endif // defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
 
 } // namespace example
 
@@ -749,7 +754,7 @@ int main(int argc, char const **argv)
   if (notSupported) {
     return EXIT_SUCCESS; // Do not fail CI checks on unsupported systems
   }
-
+#if defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
   example::Options options;
   options.parse(argc, argv);
 
@@ -970,6 +975,6 @@ int main(int argc, char const **argv)
     result &= runner.run(options);
   }
 #endif
-
   return result ? EXIT_SUCCESS : EXIT_FAILURE;
+#endif // defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
 }

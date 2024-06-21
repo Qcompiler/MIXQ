@@ -1,4 +1,4 @@
-# Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -131,7 +131,6 @@ cutlass_test_unit_add_executable(
   BATCH_SOURCES ON
   BATCH_SIZE 4
 
-
   sm50_gemm_f32_f32_f32_simt.cu
   sm80_gemm_f32_f32_f32_simt.cu
   sm50_gemm_f64_f64_f64_simt.cu
@@ -145,7 +144,6 @@ cutlass_test_unit_add_executable(
 
   BATCH_SOURCES ON
   BATCH_SIZE 4
-
 
   gemm_f16n_f16n_f32t_volta_tensor_op_f32_sm70.cu
   gemm_f16n_f16t_f32t_volta_tensor_op_f32_sm70.cu
@@ -170,6 +168,7 @@ cutlass_test_unit_add_executable(
   gemm_universal_f16n_f16t_f32t_tensor_op_f32_sm75.cu
 
   gemm_f16t_f16n_f16t_tensor_op_f16_sm75.cu
+  gemm_f16t_f16n_f16t_tensor_op_f32_sm75.cu
   gemm_f16n_f16t_f16t_tensor_op_f16_sm75.cu
   gemm_f16n_f16t_f16t_tensor_op_f16_slicedk_sm75.cu
   gemm_f16t_f16n_f16t_tensor_op_f16_slicedk_sm75.cu
@@ -224,8 +223,10 @@ cutlass_test_unit_add_executable(
   gemm_f16n_f16n_f32n_tensor_op_f32_sm80.cu
   gemm_f16n_f16n_f32t_tensor_op_f32_sm80.cu
   gemm_f16n_f16t_f16t_tensor_op_f16_sm80.cu
+  gemm_f16n_f16t_f16t_tensor_op_f32_sm80.cu
   gemm_f16n_f16t_f32t_tensor_op_f32_sm80.cu
   gemm_f16t_f16n_f16t_tensor_op_f16_sm80.cu
+  gemm_f16t_f16n_f16t_tensor_op_f32_sm80.cu
   gemm_f16t_f16n_f32t_tensor_op_f32_sm80.cu
   gemm_f16t_f16t_f32n_tensor_op_f32_sm80.cu
   gemm_f16t_f16t_f32t_tensor_op_f32_sm80.cu
@@ -240,6 +241,24 @@ cutlass_test_unit_add_executable(
   sm80_gemm_s8_s8_s32_tensor_op.cu
   sm80_gemm_f16_f16_f32_tensor_op_f32.cu
   sm80_gemm_tf32_tf32_f32_tensor_op_f32.cu
+)
+
+
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_gemm_device_mixed_input_tensorop_sm80
+
+  BATCH_SOURCES ON
+  BATCH_SIZE 4
+
+  # Upcast on Operand A
+  gemm_universal_u8t_f16n_f16t_mixed_input_tensor_op_f16_sm80.cu
+  gemm_universal_s8t_f16n_f16t_mixed_input_tensor_op_f16_sm80.cu
+  gemm_universal_s8t_bf16n_bf16t_mixed_input_tensor_op_f32_sm80.cu
+
+  # Upcast on Operand B
+  gemm_universal_f16t_u8n_f16t_mixed_input_tensor_op_f16_sm80.cu
+  gemm_universal_f16t_s8n_f16t_mixed_input_tensor_op_f16_sm80.cu
+  gemm_universal_bf16t_s8n_bf16t_mixed_input_tensor_op_f32_sm80.cu
 )
 
 cutlass_test_unit_add_executable(
@@ -272,10 +291,23 @@ cutlass_test_unit_add_executable(
 
   BATCH_SOURCES ON
   BATCH_SIZE 4
-  sm90_gemm_f16_f16_f16_alignx_tensor_op.cu
+
+  sm90_gemm_f16_f16_f16_alignx_tensor_op_f32.cu
+  sm90_gemm_f16_f16_f16_alignx_tensor_op_f32_warpspecialized.cu
+  sm90_gemm_f16_f16_f16_alignx_tensor_op_f32_warpspecialized_cooperative.cu
+  sm90_gemm_f16_f16_f16_alignx_tensor_op_f32_warpspecialized_pingpong.cu
   sm90_gemm_bf16_bf16_bf16_alignx_tensor_op_f32.cu
+  sm90_gemm_bf16_bf16_bf16_alignx_tensor_op_f32_warpspecialized.cu
+  sm90_gemm_bf16_bf16_bf16_alignx_tensor_op_f32_warpspecialized_cooperative.cu
+  sm90_gemm_bf16_bf16_bf16_alignx_tensor_op_f32_warpspecialized_pingpong.cu
   sm90_gemm_s8_s8_s8_alignx_tensor_op_s32.cu
+  sm90_gemm_s8_s8_s8_alignx_tensor_op_s32_warpspecialized.cu
+  sm90_gemm_s8_s8_s8_alignx_tensor_op_s32_warpspecialized_cooperative.cu
+  sm90_gemm_s8_s8_s8_alignx_tensor_op_s32_warpspecialized_pingpong.cu
   sm90_gemm_tf32_tf32_f32_alignx_tensor_op_f32.cu
+  sm90_gemm_tf32_tf32_f32_alignx_tensor_op_f32_warpspecialized.cu
+  sm90_gemm_tf32_tf32_f32_alignx_tensor_op_f32_warpspecialized_cooperative.cu
+  sm90_gemm_tf32_tf32_f32_alignx_tensor_op_f32_warpspecialized_pingpong.cu
 )
 
 # Fused epilogue tests
@@ -284,6 +316,7 @@ cutlass_test_unit_add_executable(
 
   BATCH_SOURCES ON
   BATCH_SIZE 4
+
   sm90_gemm_f16_f16_f16_tensor_op_f32_tensor_broadcast.cu
   sm90_gemm_f32_f32_f32_tensor_op_f32_tensor_broadcast.cu
   sm90_gemm_s8_s8_s8_tensor_op_s32_tensor_broadcast.cu
@@ -297,8 +330,12 @@ cutlass_test_unit_add_executable(
   sm90_gemm_f16_f16_f16_tensor_op_f32_cluster_warpspecialized_pingpong_reduce.cu
   sm90_gemm_f16_f16_f16_tensor_op_f32_cluster_warpspecialized_cooperative_dag.cu
   sm90_gemm_f16_f16_f16_tensor_op_f32_cluster_warpspecialized_pingpong_dag.cu
+  sm90_gemm_f16_f16_f16_tensor_op_f32_cluster_warpspecialized_cooperative_aux_store.cu
+  # Fp8
+  sm90_gemm_f8_f8_f8_tensor_op_fp32_evt.cu
+  sm90_gemm_f8_f8_bf16_tensor_op_fp32_evt.cu
+  sm90_gemm_f8_f8_f32_tensor_op_f32_cluster_warpspecialized_cooperative_evt.cu
 )
-
 cutlass_test_unit_add_executable(
   cutlass_test_unit_gemm_device_tensorop_cluster_multicast_sm90
 
@@ -319,6 +356,8 @@ cutlass_test_unit_add_executable(
   BATCH_SIZE 4
 
   sm90_gemm_tf32_tf32_f32_tensor_op_f32_gmma_rs_cluster_warpspecialized.cu
+  sm90_gemm_f8_f8_f32_tensor_op_f32_rs_cluster_warpspecialized_cooperative.cu
+  sm90_gemm_f16_f16_f32_tensor_op_f32_rs_cluster_warpspecialized_cooperative.cu
 )
 
 cutlass_test_unit_add_executable(
@@ -339,23 +378,6 @@ cutlass_test_unit_add_executable(
   gemm_f32n_f32n_f32t_tensor_op_bf16_f32_sm80.cu
 
   sm80_gemm_f16_f16_f32_tensor_op_f32.cu
-)
-
-cutlass_test_unit_add_executable(
-  cutlass_test_unit_gemm_device_mixed_input_tensorop_sm80
-
-  BATCH_SOURCES ON
-  BATCH_SIZE 4
-  
-  # Upcast on Operand A
-  gemm_universal_u8t_f16n_f16t_mixed_input_tensor_op_f16_sm80.cu
-  gemm_universal_s8t_f16n_f16t_mixed_input_tensor_op_f16_sm80.cu
-  gemm_universal_s8t_bf16n_bf16t_mixed_input_tensor_op_f32_sm80.cu
-
-  # Upcast on Operand B
-  gemm_universal_f16t_u8n_f16t_mixed_input_tensor_op_f16_sm80.cu
-  gemm_universal_f16t_s8n_f16t_mixed_input_tensor_op_f16_sm80.cu
-  gemm_universal_bf16t_s8n_bf16t_mixed_input_tensor_op_f32_sm80.cu
 )
 
 cutlass_test_unit_add_executable(
@@ -476,6 +498,19 @@ cutlass_test_unit_add_executable(
   gemm_planar_complex_f16_f16_f32_tensor_op_sm75.cu
   gemm_planar_complex_f16_f16_f32_tensor_op_sm80.cu
 )
+
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_gemm_device_tensorop_sm89
+
+  BATCH_SOURCES ON
+  BATCH_SIZE 4
+
+  gemm_f8t_f8n_f32t_tensor_op_f32_sm89.cu
+  gemm_f8t_f8n_f32t_tensor_op_f32_sparse_sm89.cu
+  gemm_f8t_f8n_f8t_tensor_op_f32_sm89.cu
+  gemm_f8t_f8n_f8t_tensor_op_f32_sparse_sm89.cu
+)
+
 cutlass_test_unit_add_executable(
   cutlass_test_unit_gemm_device_grouped
 
@@ -523,7 +558,6 @@ cutlass_test_unit_add_executable(
   gemm_s8t_s8n_s32t_tensor_op_s32_sparse_sm80.cu
   gemm_s4t_s4n_s32t_tensor_op_s32_sparse_sm80.cu
 )
-
 
 cutlass_test_unit_add_executable(
   cutlass_test_unit_gemv_device
@@ -770,3 +804,4 @@ cutlass_test_unit_add_executable(
 )
 
 endif()
+

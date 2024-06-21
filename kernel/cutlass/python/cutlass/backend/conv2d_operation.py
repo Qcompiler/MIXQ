@@ -1,6 +1,6 @@
-################################################################################
+#################################################################################################
 #
-# Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved
+# Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -28,15 +28,16 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
-################################################################################
+#################################################################################################
 
 import ctypes
 from typing import Union
 
 from cuda import cuda
+from cutlass_library import SubstituteTemplate
 import numpy as np
 
-from cutlass import (
+from cutlass_library import (
     ConvKindNames,
     ConvKindTag,
     DataTypeNames,
@@ -71,12 +72,8 @@ from cutlass.backend.library import (
 )
 from cutlass.backend.memory_manager import device_mem_alloc
 from cutlass.backend.operation import ExecutableOperation, LaunchConfiguration
-from cutlass.backend.utils.datatypes import to_device_ptr
-from cutlass.backend.utils.software import CheckPackages, SubstituteTemplate
+from cutlass.backend.utils.device import to_device_ptr
 from cutlass.shape import GemmCoord
-
-if CheckPackages().check_torch():
-    import torch
 
 
 class Conv2dArguments(ArgumentBase):
@@ -100,6 +97,8 @@ class Conv2dArguments(ArgumentBase):
     :type split_k_mode: cutlass_library.library.SplitKMode, optional
     :param output_op: output operator, optional
     :type output_op: :class:`cutlass.backend.LinearCombinationFunctorArguments`
+    :param stream: cuda stream, defaults to cuda.cuda.CUstream(0)
+    :type stream: :class:`cuda.cuda.CUstream`
     """
 
     def __init__(self, operation, problem_size, A, B, C, D,
@@ -451,6 +450,7 @@ class Conv2dOperation:
             arguments.host_workspace,
             arguments.device_workspace,
             arguments.launch_config,
+            arguments.stream
         )
 
         if err != cuda.CUresult.CUDA_SUCCESS:

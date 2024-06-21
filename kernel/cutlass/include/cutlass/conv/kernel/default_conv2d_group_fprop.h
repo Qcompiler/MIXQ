@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -57,7 +57,7 @@ namespace conv {
 namespace kernel {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
-/// Defines a kernel for Conv2dGroupFpro
+/// Defines a kernel for Conv2dGroupFprop
 template <
   typename ElementA,
   typename LayoutA,
@@ -77,7 +77,7 @@ template <
   typename MathOperatorTag,
   conv::GroupMode GroupMode,
   conv::IteratorAlgorithm IteratorAlgorithm = IteratorAlgorithm::kOptimized,
-  conv::StrideSupport StrideSupport = StrideSupport::kStrided,
+  conv::StrideSupport StrideSupport = StrideSupport::kUnity,
   /// Access granularity of A matrix in units of elements
   int AlignmentA = 128 / cutlass::sizeof_bits<ElementA>::value,
   /// Access granularity of B matrix in units of elements
@@ -135,11 +135,11 @@ struct DefaultConv2dGroupFprop <
   AlignmentB
 > {
 
-  static_assert(std::is_same<LayoutA, cutlass::layout::TensorNHWC>::value,
+  static_assert(platform::is_same<LayoutA, cutlass::layout::TensorNHWC>::value,
     "Current group conv only support NHWC layout");
-  static_assert(std::is_same<LayoutB, cutlass::layout::TensorNHWC>::value,
+  static_assert(platform::is_same<LayoutB, cutlass::layout::TensorNHWC>::value,
     "Current group conv only support NHWC layout");
-  static_assert(std::is_same<LayoutC, cutlass::layout::TensorNHWC>::value,
+  static_assert(platform::is_same<LayoutC, cutlass::layout::TensorNHWC>::value,
     "Current group conv only support NHWC layout");
 
   // Define the core components from GEMM
@@ -269,11 +269,11 @@ struct DefaultConv2dGroupFprop <
   AlignmentB
 > {
 
-  static_assert(std::is_same<LayoutA, cutlass::layout::TensorNHWC>::value,
+  static_assert(platform::is_same<LayoutA, cutlass::layout::TensorNHWC>::value,
     "Current group conv only support NHWC layout");
-  static_assert(std::is_same<LayoutB, cutlass::layout::TensorNHWC>::value,
+  static_assert(platform::is_same<LayoutB, cutlass::layout::TensorNHWC>::value,
     "Current group conv only support NHWC layout");
-  static_assert(std::is_same<LayoutC, cutlass::layout::TensorNHWC>::value,
+  static_assert(platform::is_same<LayoutC, cutlass::layout::TensorNHWC>::value,
     "Current group conv only support NHWC layout");
 
   // Define the core components from GEMM
@@ -400,11 +400,11 @@ struct DefaultConv2dGroupFprop <
   AlignmentB
 > {
 
-  static_assert(std::is_same<LayoutA, cutlass::layout::TensorNHWC>::value,
+  static_assert(platform::is_same<LayoutA, cutlass::layout::TensorNHWC>::value,
     "Current group conv only support NHWC layout");
-  static_assert(std::is_same<LayoutB, cutlass::layout::TensorNHWC>::value,
+  static_assert(platform::is_same<LayoutB, cutlass::layout::TensorNHWC>::value,
     "Current group conv only support NHWC layout");
-  static_assert(std::is_same<LayoutC, cutlass::layout::TensorNHWC>::value,
+  static_assert(platform::is_same<LayoutC, cutlass::layout::TensorNHWC>::value,
     "Current group conv only support NHWC layout");
 
   // Define the core components from GEMM
@@ -530,11 +530,11 @@ struct DefaultConv2dGroupFprop <
   AlignmentB
 > {
 
-  static_assert(std::is_same<LayoutA, cutlass::layout::TensorNHWC>::value,
+  static_assert(platform::is_same<LayoutA, cutlass::layout::TensorNHWC>::value,
     "Current group conv only support NHWC layout");
-  static_assert(std::is_same<LayoutB, cutlass::layout::TensorNHWC>::value,
+  static_assert(platform::is_same<LayoutB, cutlass::layout::TensorNHWC>::value,
     "Current group conv only support NHWC layout");
-  static_assert(std::is_same<LayoutC, cutlass::layout::TensorNHWC>::value,
+  static_assert(platform::is_same<LayoutC, cutlass::layout::TensorNHWC>::value,
     "Current group conv only support NHWC layout");
 
   // Define the core components from GEMM

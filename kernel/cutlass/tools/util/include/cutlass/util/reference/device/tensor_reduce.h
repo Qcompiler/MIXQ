@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -120,7 +120,7 @@ __global__ void TensorTransformReducePartial(
   ComputeType *workspace) {             /// Device-side workspace for accumulating partial results. The reduced element is stored in workspace[0]
   
   int64_t idx = threadIdx.x + blockIdx.x * blockDim.x;
-  int64_t size = view_A.size();
+  auto size = static_cast<int64_t>(view_A.size());
 
   __shared__ ComputeType scratchpad[kBlockSize];
 

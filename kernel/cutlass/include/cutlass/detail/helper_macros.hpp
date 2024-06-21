@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -56,6 +56,9 @@
 #define CUTLASS_HOST_DEVICE inline
 #define CUTLASS_DEVICE inline
 #endif
+
+#define CUTLASS_HOST __host__
+#define CUTLASS_GLOBAL __global__ static
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -143,7 +146,13 @@ namespace cutlass {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#if (201700L <= __cplusplus)
+#if defined(_MSVC_LANG)
+#  define CUTLASS_CPLUSPLUS _MSVC_LANG
+#else
+#  define CUTLASS_CPLUSPLUS __cplusplus
+#endif
+
+#if (201700L <= CUTLASS_CPLUSPLUS)
 #define CUTLASS_CONSTEXPR_IF_CXX17 constexpr
 #define CUTLASS_CXX17_OR_LATER 1
 #else

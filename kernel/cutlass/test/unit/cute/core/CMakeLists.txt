@@ -1,4 +1,4 @@
-# Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -42,10 +42,12 @@ cutlass_test_unit_add_executable(
   inverse_right.cpp
   logical_divide.cpp
   logical_product.cpp
+  math.cpp  
   mixedbits.cpp
   nullspace.cpp
   pointer.cpp
   reverse.cpp
   transform.cpp
   tuple.cpp
+  int_tuple.cpp
 )

@@ -1,6 +1,6 @@
-![ALT](/media/images/gemm-hierarchy-with-epilogue-no-labels.png "CUTLASS Layouts and Tensors")
+![ALT](../images/gemm-hierarchy-with-epilogue-no-labels.png "CUTLASS Layouts and Tensors")
 
-[README](/README.md#documentation) > **Layouts and Tensors**
+[README](../../README.md#documentation) > **Layouts and Tensors**
 
 Note: This document talks about CUTLASS 2.x layout tag types.
 CUTLASS 3.0 deprecates all legacy 2.x layout tags in favour of a single `cute::Layout<Shape, Stride>`
@@ -272,7 +272,7 @@ Permuted Shared Memory Layouts:
 
 # Copyright
 
-Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: BSD-3-Clause
 
 ```

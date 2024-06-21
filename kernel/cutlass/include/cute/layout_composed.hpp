@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -37,7 +37,7 @@
 /* This implements a ComposedLayout of the form
  *   LayoutA o Offset o LayoutB
  * and is useful in cases where composition() does not or cannot apply to LayoutA and LayoutB.
- * For example, then the "divisibility condition" in shape_div is violated in composition(LayoutA, LayoutB).
+ * For example, when the "divisibility condition" in shape_div is violated in composition(LayoutA, LayoutB).
  *
  * This ComposedLayout provides similar functionality to Layout including tiling, partitioning,
  * coordinate-to-index mapping and layout manipulations, but is not considered a "normal" layout.
@@ -177,6 +177,16 @@ struct ComposedLayout : private cute::tuple<LayoutA, Offset, LayoutB>  // EBO fo
   auto
   tile(Layouts const&... layouts) const {
     return tiled_divide(*this, make_tile(layouts...));
+  }
+
+  // Equality, return a static or dynamic boolean
+  template <class... Args>
+  CUTE_HOST_DEVICE constexpr
+  auto
+  operator==(ComposedLayout<Args...> const& other) const {
+    return this->layout_a() == other.layout_a() &&
+           this->layout_b() == other.layout_b() &&
+           this->offset()   == other.offset();
   }
 };
 
@@ -357,12 +367,11 @@ composition(LayoutA const& layoutA,
   return ComposedLayout<LayoutA, Offset, LayoutB>{layoutA, offset, layoutB};
 }
 
-template <class A, class O, class B,
-          class LayoutOrTile>
+template <class A, class O, class B, class Tiler>
 CUTE_HOST_DEVICE constexpr
 auto
 composition(ComposedLayout<A,O,B> const& a,
-            LayoutOrTile          const& b)
+            Tiler                 const& b)
 {
   return composition(a.layout_a(), a.offset(), composition(a.layout_b(), b));
 }
@@ -383,12 +392,12 @@ composition(Layout<ShapeA,StrideA> const& a,
 // complement
 //
 
-template <class A, class O, class B, class CoSizeHi>
+template <class A, class O, class B, class CoTarget>
 CUTE_HOST_DEVICE constexpr
 auto
-complement(ComposedLayout<A,O,B> const& layout, CoSizeHi const& cosize_hi)
+complement(ComposedLayout<A,O,B> const& layout, CoTarget const& cotarget)
 {
-  return complement(layout.layout_b(), cosize_hi);
+  return complement(layout.layout_b(), cotarget);
 }
 
 template <class A, class O, class B>
@@ -433,82 +442,101 @@ zip(ComposedLayout<A,O,B> const& a)
 
 // Partitions
 
-template <class A, class O, class B,
-          class Tile>
+template <class A, class O, class B, class Tiler>
 CUTE_HOST_DEVICE constexpr
 auto
 logical_divide(ComposedLayout<A,O,B> const& a,
-               Tile                  const& b)
+               Tiler                 const& b)
 {
   return composition(a.layout_a(), a.offset(), logical_divide(a.layout_b(), b));
 }
 
-template <class A, class O, class B,
-          class Tile>
+template <class A, class O, class B, class Tiler>
 CUTE_HOST_DEVICE constexpr
 auto
 tile_unzip(ComposedLayout<A,O,B> const& a,
-           Tile                  const& b)
+           Tiler                 const& b)
 {
   return composition(a.layout_a(), a.offset(), tile_unzip(a.layout_b(), b));
 }
 
-template <class A, class O, class B,
-          class Tile>
+template <class A, class O, class B, class Tiler>
 CUTE_HOST_DEVICE constexpr
 auto
 tiled_divide(ComposedLayout<A,O,B> const& a,
-             Tile                  const& b)
+             Tiler                 const& b)
 {
   return composition(a.layout_a(), a.offset(), tiled_divide(a.layout_b(), b));
 }
 
-template <class A, class O, class B,
-          class Tile>
+template <class A, class O, class B, class Tiler>
 CUTE_HOST_DEVICE constexpr
 auto
 zipped_divide(ComposedLayout<A,O,B> const& a,
-              Tile                  const& b)
+              Tiler                 const& b)
 {
   return composition(a.layout_a(), a.offset(), zipped_divide(a.layout_b(), b));
 }
 
-template <class A, class O, class B,
-          class Tile>
+template <class A, class O, class B, class Tiler>
+CUTE_HOST_DEVICE constexpr
+auto
+flat_divide(ComposedLayout<A,O,B> const& a,
+            Tiler                 const& b)
+{
+  return composition(a.layout_a(), a.offset(), flat_divide(a.layout_b(), b));
+}
+
+template <class A, class O, class B, class Tiler>
 CUTE_HOST_DEVICE constexpr
 auto
 logical_product(ComposedLayout<A,O,B> const& a,
-                Tile                  const& b)
+                Tiler                 const& b)
 {
   return composition(a.layout_a(), a.offset(), logical_product(a.layout_b(), b));
 }
 
-template <class A, class O, class B,
-          class Tile>
+template <class A, class O, class B, class Tiler>
+CUTE_HOST_DEVICE constexpr
+auto
+zipped_product(ComposedLayout<A,O,B> const& a,
+               Tiler                 const& b)
+{
+  return composition(a.layout_a(), a.offset(), zipped_product(a.layout_b(), b));
+}
+
+template <class A, class O, class B, class Tiler>
 CUTE_HOST_DEVICE constexpr
 auto
 tiled_product(ComposedLayout<A,O,B> const& a,
-              Tile                  const& b)
+              Tiler                 const& b)
 {
   return composition(a.layout_a(), a.offset(), tiled_product(a.layout_b(), b));
 }
 
-template <class A, class O, class B,
-          class Tile>
+template <class A, class O, class B, class Tiler>
+CUTE_HOST_DEVICE constexpr
+auto
+flat_product(ComposedLayout<A,O,B> const& a,
+             Tiler                 const& b)
+{
+  return composition(a.layout_a(), a.offset(), flat_product(a.layout_b(), b));
+}
+
+template <class A, class O, class B, class Tiler>
 CUTE_HOST_DEVICE constexpr
 auto
 blocked_product(ComposedLayout<A,O,B> const& a,
-                Tile                  const& b)
+                Tiler                 const& b)
 {
   return composition(a.layout_a(), a.offset(), blocked_product(a.layout_b(), b));
 }
 
-template <class A, class O, class B,
-          class Tile>
+template <class A, class O, class B, class Tiler>
 CUTE_HOST_DEVICE constexpr
 auto
 raked_product(ComposedLayout<A,O,B> const& a,
-              Tile                  const& b)
+              Tiler                 const& b)
 {
   return composition(a.layout_a(), a.offset(), raked_product(a.layout_b(), b));
 }
@@ -573,18 +601,21 @@ template <class OldType, class NewType,
           class A, class O, class B>
 CUTE_HOST_DEVICE constexpr
 auto
-recast(ComposedLayout<A,O,B> const& layout)
+recast_layout(ComposedLayout<A,O,B> const& layout)
 {
-  if constexpr (sizeof(NewType) == sizeof(OldType)) {
+  using scale = decltype(trait_ratio(sizeof_bits<NewType>{}, sizeof_bits<OldType>{}));
+  if constexpr (scale::num == 1 && scale::den == 1) {
     return layout;
-  } else if constexpr (sizeof(NewType) > sizeof(OldType)) {
-    static_assert(sizeof(NewType) % sizeof(OldType) == 0, "NewType must be a multiple of OldType");
-    return upcast<sizeof(NewType)/sizeof(OldType)>(layout);
-  } else if constexpr (sizeof(NewType) < sizeof(OldType)) {
-    static_assert(sizeof(OldType) % sizeof(NewType) == 0, "NewType must be a divisor of OldType");
-    return downcast<sizeof(OldType)/sizeof(NewType)>(layout);
   }
-
+  else if constexpr (scale::num == 1) {
+    return downcast<scale::den>(layout);
+  }
+  else if constexpr (scale::den == 1) {
+    return upcast<scale::num>(layout);
+  }
+  else {
+    static_assert(dependent_false<scale>, "Recast not supported.");
+  }
   CUTE_GCC_UNREACHABLE;
 }
 

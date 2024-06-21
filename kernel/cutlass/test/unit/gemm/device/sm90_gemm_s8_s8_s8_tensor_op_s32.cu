@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -290,7 +290,7 @@ TEST(SM90_Device_Gemm_s8t_s8n_s8n_tensor_op_gmma_s32_pingpong_epilogue, 64x128x1
       int8_t, LayoutB, 16,
       int32_t,
       Shape<_64,_128,_128>, Shape<_1,_1,_1>,
-      cutlass::gemm::collective::StageCountAutoCarveout<sizeof(typename CollectiveEpilogue::SharedStorage)>,
+      cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(sizeof(typename CollectiveEpilogue::SharedStorage))>,
       cutlass::gemm::KernelTmaWarpSpecializedPingpong
     >::CollectiveOp;
 
@@ -326,7 +326,7 @@ TEST(SM90_Device_Gemm_s8t_s8n_s8t_tensor_op_gmma_s32_pingpong_epilogue, 64x128x1
       int8_t, LayoutB, 16,
       int32_t,
       Shape<_64,_128,_128>, Shape<_1,_1,_1>,
-      cutlass::gemm::collective::StageCountAutoCarveout<sizeof(typename CollectiveEpilogue::SharedStorage)>,
+      cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(sizeof(typename CollectiveEpilogue::SharedStorage))>,
       cutlass::gemm::KernelTmaWarpSpecializedPingpong
     >::CollectiveOp;
 
@@ -362,7 +362,7 @@ TEST(SM90_Device_Gemm_s8t_s8n_s8n_tensor_op_gmma_s32_cooperative_epilogue, 128x1
       int8_t, LayoutB, 16,
       int32_t,
       Shape<_128,_128,_128>, Shape<_1,_1,_1>,
-      cutlass::gemm::collective::StageCountAutoCarveout<sizeof(typename CollectiveEpilogue::SharedStorage)>,
+      cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(sizeof(typename CollectiveEpilogue::SharedStorage))>,
       cutlass::gemm::KernelTmaWarpSpecializedCooperative
     >::CollectiveOp;
 
@@ -398,7 +398,7 @@ TEST(SM90_Device_Gemm_s8t_s8n_s8t_tensor_op_gmma_s32_cooperative_epilogue, 128x1
       int8_t, LayoutB, 16,
       int32_t,
       Shape<_128,_128,_128>, Shape<_1,_1,_1>,
-      cutlass::gemm::collective::StageCountAutoCarveout<sizeof(typename CollectiveEpilogue::SharedStorage)>,
+      cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(sizeof(typename CollectiveEpilogue::SharedStorage))>,
       cutlass::gemm::KernelTmaWarpSpecializedCooperative
     >::CollectiveOp;
 

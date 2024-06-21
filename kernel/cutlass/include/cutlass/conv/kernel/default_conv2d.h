@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -106,6 +106,49 @@ struct DefaultConvEpilogue<
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
+template <
+  typename ArchTag,
+  typename Shape,
+  typename WarpMmaSimt,
+  typename ElementOutput,
+  typename ElementTensor,
+  typename ElementVector,
+  typename OutputOp,
+  int ElementsPerAccess
+>
+struct DefaultConvEpilogueWithBroadcastSimt {
+  using Epilogue = typename epilogue::threadblock::DefaultEpilogueWithBroadcastSimt<
+    Shape,
+    WarpMmaSimt,
+    ElementOutput,
+    ElementTensor,
+    ElementVector,
+    OutputOp,
+    ElementsPerAccess
+  >::Epilogue;
+};
+
+template <
+  typename ArchTag,
+  typename Shape,
+  typename WarpMmaSimt,
+  typename ElementOutput,
+  typename ElementTensor,
+  typename ElementVector,
+  typename OutputOp,
+  int ElementsPerAccess
+>
+struct DefaultConvEpilogueWithBroadcastSimtStridedDgrad {
+  using Epilogue = typename epilogue::threadblock::DefaultEpilogueWithBroadcastSimtStridedDgrad<
+    Shape,
+    WarpMmaSimt,
+    ElementOutput,
+    ElementTensor,
+    ElementVector,
+    OutputOp,
+    ElementsPerAccess
+  >::Epilogue;
+};
 
 template <
   typename ArchTag,

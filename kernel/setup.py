@@ -94,6 +94,7 @@ def get_compute_capabilities():
     for cap in compute_capabilities:
         capability_flags += ["-gencode", f"arch=compute_{cap},code=sm_{cap}"]
 
+    capability_flags += ["-gencode", f"arch=compute_90a,code=sm_90a"]
     return capability_flags
 
 check_dependencies()
@@ -135,6 +136,7 @@ extensions = [
         [
             "mix_cuda/pybind_mix.cpp",
             "mix_cuda/cult.cu",
+             "mix_cuda/gemmdequant.cu",
             "mix_cuda/mma_permutated.cu",
             "mix_cuda/layernorm/layernorm.cu",
             #"mix_cuda/cutlassmix.cu",

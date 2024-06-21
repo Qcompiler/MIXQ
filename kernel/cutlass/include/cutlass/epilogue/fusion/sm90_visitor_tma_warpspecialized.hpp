@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -37,6 +37,7 @@
 #pragma once
 
 #include "cutlass/cutlass.h"
+#include "cutlass/workspace.h"
 
 #include "cute/tensor.hpp"
 
@@ -71,7 +72,7 @@ sm90_partition_for_epilogue(
     TiledCopy tiled_copy,
     int thread_idx) {
   ThrCopy thread_copy = tiled_copy.get_thread_slice(thread_idx);
-  Tensor cT_epi = local_tile(cT, epi_tile, _);                               // (EPI_TILE_M,EPI_TILE_N,EPI_M,EPI_N,...)
+  Tensor cT_epi = flat_divide(cT, epi_tile);                                 // (EPI_TILE_M,EPI_TILE_N,EPI_M,EPI_N,...)
   if constexpr (ReferenceSrc) {
     return thread_copy.partition_S(cT_epi);                                        // (CPY,CPY_M,CPY_N,EPI_M,EPI_N,...)
   }
@@ -98,7 +99,10 @@ sm90_partition_for_epilogue(
     TiledCopy tiled_copy,
     int thread_idx) {
   auto [m, n, k, l] = tile_coord_mnkl;
-  Tensor cT = local_tile(mT, take<0,2>(tile_shape_mnk), make_coord(m,n,l));                            // (CTA_M,CTA_N)
+  auto coord_shape =
+      make_coord(m, n, l)
+    ;
+  Tensor cT = local_tile(mT, take<0,2>(tile_shape_mnk), coord_shape);                                  // (CTA_M,CTA_N)
   Tensor tCcT =
     sm90_partition_for_epilogue<ReferenceSrc>(cT, epi_tile, tiled_copy, thread_idx);   // (CPY,CPY_M,CPY_N,EPI_M,EPI_N)
 
@@ -110,6 +114,84 @@ sm90_partition_for_epilogue(
 // Visitor Implementation
 //
 /////////////////////////////////////////////////////////////////////////////////////////////////
+
+template<
+  class ProblemShapeMNKL,
+  class TileShapeMNK,
+  class TileCoordMNKL,
+  class ResidueMN,
+  class EpilogueTile
+>
+struct ProducerLoadArgs {
+  ProblemShapeMNKL problem_shape_mnkl;
+  TileShapeMNK tile_shape_mnk;
+  TileCoordMNKL tile_coord_mnkl;
+  ResidueMN residue_mn;
+  EpilogueTile epi_tile;
+  int thread_idx;
+
+  CUTLASS_DEVICE
+  ProducerLoadArgs(
+      ProblemShapeMNKL problem_shape_mnkl,
+      TileShapeMNK tile_shape_mnk,
+      TileCoordMNKL tile_coord_mnkl,
+      ResidueMN residue_mn,
+      EpilogueTile epi_tile,
+      int thread_idx)
+  : problem_shape_mnkl(problem_shape_mnkl),
+    tile_shape_mnk(tile_shape_mnk),
+    tile_coord_mnkl(tile_coord_mnkl),
+    residue_mn(residue_mn),
+    epi_tile(epi_tile),
+    thread_idx(thread_idx) {}
+};
+
+template<
+  class ProblemShapeMNKL,
+  class TileShapeMNK,
+  class TileCoordMNKL,
+  class ResidueMN,
+  class EpilogueTile,
+  class TiledCopy,
+  class CoordTensor,
+  class ThrCoordTensor,
+  class ThrSrcTensor
+>
+struct ConsumerStoreArgs {
+  ProblemShapeMNKL problem_shape_mnkl;
+  TileShapeMNK tile_shape_mnk;
+  TileCoordMNKL tile_coord_mnkl;
+  ResidueMN residue_mn;
+  EpilogueTile epi_tile;
+  TiledCopy tiled_copy;
+  int thread_idx;
+  CoordTensor cD;
+  ThrCoordTensor tCcD;
+  ThrSrcTensor const& tCrC;
+
+  CUTLASS_DEVICE
+  ConsumerStoreArgs(
+      ProblemShapeMNKL problem_shape_mnkl,
+      TileShapeMNK tile_shape_mnk,
+      TileCoordMNKL tile_coord_mnkl,
+      ResidueMN residue_mn,
+      EpilogueTile epi_tile,
+      TiledCopy tiled_copy,
+      int thread_idx,
+      CoordTensor cD,
+      ThrCoordTensor tCcD,
+      ThrSrcTensor const& tCrC)
+  : problem_shape_mnkl(problem_shape_mnkl),
+    tile_shape_mnk(tile_shape_mnk),
+    tile_coord_mnkl(tile_coord_mnkl),
+    residue_mn(residue_mn),
+    epi_tile(epi_tile),
+    tiled_copy(tiled_copy),
+    thread_idx(thread_idx),
+    cD(cD),
+    tCcD(tCcD),
+    tCrC(tCrC) {}
+};
 
 template <class... Ops>
 struct Sm90VisitorImplBase {
@@ -123,12 +205,59 @@ struct Sm90VisitorImplBase {
   template <class ProblemShape>
   static constexpr Params
   to_underlying_arguments(ProblemShape const& problem_shape, Arguments const& args, void* workspace) {
+    uint8_t* op_workspace = reinterpret_cast<uint8_t*>(workspace);
     return transform_apply(tuple<Ops...>{}, args,
       [&] (auto&& op, auto const& op_args) {
         using Op = cute::remove_cvref_t<decltype(op)>;
-        return Op::to_underlying_arguments(problem_shape, op_args, workspace);
+        auto ret = Op::to_underlying_arguments(problem_shape, op_args, op_workspace);
+        if (op_workspace != nullptr) {
+          size_t op_workspace_size = Op::get_workspace_size(problem_shape, op_args);
+          op_workspace += round_nearest(op_workspace_size, MinWorkspaceAlignment);
+        }
+        return ret;
       },
       [] (auto&&... op_params) { return cute::make_tuple(op_params...); }
+    );
+  }
+
+  template <class ProblemShape>
+  static size_t
+  get_workspace_size(ProblemShape const& problem_shape, Arguments const& args) {
+    return transform_apply(tuple<Ops...>{}, args,
+      [&] (auto&& op, auto const& op_args) {
+        using Op = cute::remove_cvref_t<decltype(op)>;
+        size_t op_workspace_size = Op::get_workspace_size(problem_shape, op_args);
+        return round_nearest(op_workspace_size, MinWorkspaceAlignment);
+      },
+      [&] (auto&&... op_workspace_size) {
+        return (0 + ... + op_workspace_size);
+      }
+    );
+  }
+
+  template <class ProblemShape>
+  static cutlass::Status
+  initialize_workspace(ProblemShape const& problem_shape, Arguments const& args, void* workspace, cudaStream_t stream,
+    CudaHostAdapter* cuda_adapter = nullptr) {
+    Status status = Status::kSuccess;
+    uint8_t* op_workspace = reinterpret_cast<uint8_t*>(workspace);
+    return transform_apply(tuple<Ops...>{}, args,
+      // Initialize each operation's workspace, stopping at the first error
+      [&] (auto&& op, auto const& op_args) {
+        if (status != Status::kSuccess) {
+          return status;
+        }
+
+        using Op = cute::remove_cvref_t<decltype(op)>;
+        status = Op::initialize_workspace(problem_shape, op_args, op_workspace, stream, cuda_adapter);
+        if (op_workspace != nullptr) {
+          size_t op_workspace_size = Op::get_workspace_size(problem_shape, op_args);
+          op_workspace += round_nearest(op_workspace_size, MinWorkspaceAlignment);
+        }
+        return status;
+      },
+      // Return the final status
+      [&] (auto const&...ops) { return status; }
     );
   }
 
@@ -153,8 +282,18 @@ struct Sm90VisitorImplBase {
 template <class... Ops>
 struct Sm90VisitorImpl : Sm90VisitorImplBase<Ops...> {
 
-  using Sm90VisitorImplBase<Ops...>::Sm90VisitorImplBase;
-  using Sm90VisitorImplBase<Ops...>::ops;
+  using Impl = Sm90VisitorImplBase<Ops...>;
+  using Params = typename Impl::Params;
+  using SharedStorage = typename Impl::SharedStorage;
+
+  CUTLASS_HOST_DEVICE
+  Sm90VisitorImpl() {}
+
+  CUTLASS_HOST_DEVICE
+  Sm90VisitorImpl(Params const& params, SharedStorage const& shared_storage)
+    : Impl(params, shared_storage) {}
+
+  using Impl::ops;
 
   //
   // Queries for kernel runtime
@@ -167,13 +306,11 @@ struct Sm90VisitorImpl : Sm90VisitorImplBase<Ops...> {
   // e.g. for batched beta this must always be true regardless of current batch idx
   CUTLASS_DEVICE bool
   is_producer_load_needed() const {
-    bool needed = false;
-    for_each(ops,
-      [&] (auto const& op) {
-        needed |= op.is_producer_load_needed();
+    return cute::apply(ops,
+      [] (auto const&... op) {
+        return (false || ... || op.is_producer_load_needed());
       }
     );
-    return needed;
   }
 
   // Is a producer TMA load specifically for C needed
@@ -183,13 +320,11 @@ struct Sm90VisitorImpl : Sm90VisitorImplBase<Ops...> {
   // e.g. for batched beta this can be false depending on current batch idx
   CUTLASS_DEVICE bool
   is_C_load_needed() const {
-    bool needed = false;
-    for_each(ops,
-      [&] (auto const& op) {
-        needed |= op.is_C_load_needed();
+    return cute::apply(ops,
+      [] (auto const&... op) {
+        return (false || ... || op.is_C_load_needed());
       }
     );
-    return needed;
   }
 
   //
@@ -241,28 +376,12 @@ struct Sm90VisitorImpl : Sm90VisitorImplBase<Ops...> {
 
   // Producer load callbacks factory
   // All operations must redefine this, but most can just dispatch to the base impl
-  template <
-    class ProblemShapeMNKL,
-    class TileShapeMNK,
-    class TileCoordMNKL,
-    class EpilogueTile
-  >
+  template <class... Args>
   CUTLASS_DEVICE auto
-  get_producer_load_callbacks(
-      ProblemShapeMNKL problem_shape_mnkl,
-      TileShapeMNK tile_shape_mnk,
-      TileCoordMNKL tile_coord_mnkl,
-      EpilogueTile epi_tile,
-      int thread_idx) {
+  get_producer_load_callbacks(ProducerLoadArgs<Args...> const& args) {
     return transform_apply(ops,
       [&] (auto& op) {
-        return op.get_producer_load_callbacks(
-          problem_shape_mnkl,
-          tile_shape_mnk,
-          tile_coord_mnkl,
-          epi_tile,
-          thread_idx
-        );
+        return op.get_producer_load_callbacks(args);
       },
       [] (auto&&... callbacks) {
         auto callbacks_tuple = cute::make_tuple(callbacks...);
@@ -293,10 +412,10 @@ struct Sm90VisitorImpl : Sm90VisitorImplBase<Ops...> {
     // Start of subtile store iteration. Smem broadcasts usually performed here.
     // Upon entry, all producer loads for this subtile are completed and visible.
     CUTLASS_DEVICE void
-    step_begin(int epi_m, int epi_n, int load_iteration, bool is_producer_load_needed) {
+    previsit(int epi_m, int epi_n, int load_iteration, bool is_producer_load_needed) {
       for_each(callbacks_tuple,
         [&] (auto& callbacks) {
-          callbacks.step_begin(epi_m, epi_n, load_iteration, is_producer_load_needed);
+          callbacks.previsit(epi_m, epi_n, load_iteration, is_producer_load_needed);
         }
       );
     }
@@ -308,24 +427,41 @@ struct Sm90VisitorImpl : Sm90VisitorImplBase<Ops...> {
           Array<ElementInputs, FragmentSize> const&... frg_inputs) // depends on the N-naryness of the op
       = delete; // Must be implemented for each operation
 
-    // After D smem store, before smem async fence. Smem reductions usually performed here.
-    // Upon exit, all smem stores for TMA must have been issued
+    // After visit call. Smem reductions usually performed here
+    // reduction_buffer is an arbitrary smem tensor that can be used for workspace
+    // It is each nodes reponsibility to assert that this buffer is sufficiently sized
+    // and to ensure that this buffer is no longer needed upon callback exit
+    // i.e. results are synchronized and no longer in the reduction buffer
+    template <class STensor, class SyncFn>
     CUTLASS_DEVICE void
-    step_next(int epi_m, int epi_n, int store_iteration, bool issue_smem_store) {
+    reduce(STensor&& reduction_buffer, SyncFn const& sync_fn, int epi_m, int epi_n, bool is_last_iteration) {
       for_each(callbacks_tuple,
         [&] (auto& callbacks) {
-          callbacks.step_next(epi_m, epi_n, store_iteration, issue_smem_store);
+          callbacks.reduce(reduction_buffer, sync_fn, epi_m, epi_n, is_last_iteration);
         }
       );
     }
 
-    // End of subtile iteration, before TMA store commit. Aux stores usually performed here
-    // Upon exit, all TMA stores for this subtile must have been issued
+    // After reduce call, before smem async fence. Smem stores usually performed here.
+    // Upon exit, all smem stores for TMA must have been issued
     CUTLASS_DEVICE void
-    step_end(int epi_m, int epi_n, int store_iteration, bool issue_tma_store) {
+    postreduce(int epi_m, int epi_n, int store_iteration, bool issue_smem_store) {
       for_each(callbacks_tuple,
         [&] (auto& callbacks) {
-          callbacks.step_end(epi_m, epi_n, store_iteration, issue_tma_store);
+          callbacks.postreduce(epi_m, epi_n, store_iteration, issue_smem_store);
+        }
+      );
+    }
+
+    // After smem async fence, before TMA store commit. Aux stores usually performed here
+    // Upon exit, all TMA stores for this subtile must have been issued
+    // Because of the TMA store delay optimization, this entry point must ONLY be used for TMA stores
+    // other gmem stores can be placed in the reduce or postreduce entry points
+    CUTLASS_DEVICE void
+    tma_store(int epi_m, int epi_n, int store_iteration, bool issue_tma_store) {
+      for_each(callbacks_tuple,
+        [&] (auto& callbacks) {
+          callbacks.tma_store(epi_m, epi_n, store_iteration, issue_tma_store);
         }
       );
     }
@@ -345,33 +481,13 @@ struct Sm90VisitorImpl : Sm90VisitorImplBase<Ops...> {
   // All operations must redefine this
   template <
     bool ReferenceSrc, // do register tensors reference the src or dst layout of the tiled copy
-    class ProblemShapeMNKL,
-    class TileShapeMNK,
-    class TileCoordMNKL,
-    class EpilogueTile,
-    class TiledCopy,
-    class SrcTensor
+    class... Args
   >
   CUTLASS_DEVICE auto
-  get_consumer_store_callbacks(
-      ProblemShapeMNKL problem_shape_mnkl,
-      TileShapeMNK tile_shape_mnk,
-      TileCoordMNKL tile_coord_mnkl,
-      EpilogueTile epi_tile,
-      TiledCopy tiled_copy,
-      int thread_idx,
-      SrcTensor const& tCrC) {
+  get_consumer_store_callbacks(ConsumerStoreArgs<Args...> const& args) {
     return transform_apply(ops,
       [&] (auto& op) {
-        return op.template get_consumer_store_callbacks<ReferenceSrc>(
-          problem_shape_mnkl,
-          tile_shape_mnk,
-          tile_coord_mnkl,
-          epi_tile,
-          tiled_copy,
-          thread_idx,
-          tCrC
-        );
+        return op.template get_consumer_store_callbacks<ReferenceSrc>(args);
       },
       [] (auto&&... callbacks) {
         auto callbacks_tuple = cute::make_tuple(callbacks...);
@@ -402,7 +518,18 @@ using namespace detail;
 template <class NodeOp, class... ChildOps>
 struct Sm90TreeVisitor : Sm90VisitorImpl<ChildOps..., NodeOp> {
 
-  using Sm90VisitorImpl<ChildOps..., NodeOp>::Sm90VisitorImpl;
+  using Impl = Sm90VisitorImpl<ChildOps..., NodeOp>;
+  using Params = typename Impl::Params;
+  using SharedStorage = typename Impl::SharedStorage;
+
+  CUTLASS_HOST_DEVICE
+  Sm90TreeVisitor() {}
+
+  CUTLASS_HOST_DEVICE
+  Sm90TreeVisitor(
+      Params const& params,
+      SharedStorage const& shared_storage)
+    : Impl(params, shared_storage) {}
 
   template<class CallbacksImpl>
   struct ConsumerStoreCallbacks : CallbacksImpl {
@@ -430,36 +557,14 @@ struct Sm90TreeVisitor : Sm90VisitorImpl<ChildOps..., NodeOp> {
 
   template <
     bool ReferenceSrc, // do register tensors reference the src or dst layout of the tiled copy
-    class ProblemShapeMNKL,
-    class TileShapeMNK,
-    class TileCoordMNKL,
-    class EpilogueTile,
-    class TiledCopy,
-    class SrcTensor
+    class... Args
   >
   CUTLASS_DEVICE auto
-  get_consumer_store_callbacks(
-      ProblemShapeMNKL problem_shape_mnkl,
-      TileShapeMNK tile_shape_mnk,
-      TileCoordMNKL tile_coord_mnkl,
-      EpilogueTile epi_tile,
-      TiledCopy tiled_copy,
-      int thread_idx,
-      SrcTensor const& tCrC) {
-    return ConsumerStoreCallbacks(
-      Sm90VisitorImpl<ChildOps..., NodeOp>::
-      get_consumer_store_callbacks<ReferenceSrc>(
-        problem_shape_mnkl,
-        tile_shape_mnk,
-        tile_coord_mnkl,
-        epi_tile,
-        tiled_copy,
-        thread_idx,
-        tCrC
-      )
-    );
+  get_consumer_store_callbacks(ConsumerStoreArgs<Args...> const& args) {
+    auto callbacks_tuple = Sm90VisitorImpl<ChildOps..., NodeOp>::
+      template get_consumer_store_callbacks<ReferenceSrc>(args);
+    return ConsumerStoreCallbacks<decltype(callbacks_tuple)>(std::move(callbacks_tuple));
   }
-
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -489,10 +594,9 @@ struct Sm90SplitTreeVisitor : Sm90VisitorImpl<InputTree, AuxOutTrees..., OutputT
       Array frg_input = get<0>(callbacks_tuple).visit(frg_acc, epi_v, epi_m, epi_n);
 
       constexpr int Rm2 = sizeof...(AuxOutTrees);
-      cute::detail::for_sequence(make_seq<Rm2>{}, // restrict the sequence to aux out trees
-        [&] (auto&& _I) {
-          constexpr int i = remove_cvref_t<decltype(_I)>::value;
-          get<i+1>(callbacks_tuple).visit(frg_input, epi_v, epi_m, epi_n);
+      cute::for_each(make_seq<Rm2>{}, // restrict the sequence to aux out trees
+        [&] (auto I) {
+          get<I+1>(callbacks_tuple).visit(frg_input, epi_v, epi_m, epi_n);
         }
       );
 
@@ -502,36 +606,14 @@ struct Sm90SplitTreeVisitor : Sm90VisitorImpl<InputTree, AuxOutTrees..., OutputT
 
   template <
     bool ReferenceSrc, // do register tensors reference the src or dst layout of the tiled copy
-    class ProblemShapeMNKL,
-    class TileShapeMNK,
-    class TileCoordMNKL,
-    class EpilogueTile,
-    class TiledCopy,
-    class SrcTensor
+    class... Args
   >
   CUTLASS_DEVICE auto
-  get_consumer_store_callbacks(
-      ProblemShapeMNKL problem_shape_mnkl,
-      TileShapeMNK tile_shape_mnk,
-      TileCoordMNKL tile_coord_mnkl,
-      EpilogueTile epi_tile,
-      TiledCopy tiled_copy,
-      int thread_idx,
-      SrcTensor const& tCrC) {
-    return ConsumerStoreCallbacks(
-      Sm90VisitorImpl<InputTree, AuxOutTrees..., OutputTree>::
-      get_consumer_store_callbacks<ReferenceSrc>(
-        problem_shape_mnkl,
-        tile_shape_mnk,
-        tile_coord_mnkl,
-        epi_tile,
-        tiled_copy,
-        thread_idx,
-        tCrC
-      )
-    );
+  get_consumer_store_callbacks(ConsumerStoreArgs<Args...> const& args) {
+    auto callbacks_tuple = Sm90VisitorImpl<InputTree, AuxOutTrees..., OutputTree>::
+      template get_consumer_store_callbacks<ReferenceSrc>(args);
+    return ConsumerStoreCallbacks<decltype(callbacks_tuple)>(std::move(callbacks_tuple));
   }
-
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -545,7 +627,7 @@ template<
 >
 struct Sm90TopologicalVisitor : Sm90VisitorImpl<Ops...> {
   static_assert(is_static_v<EdgeTuple>);
-  static_assert(rank(EdgeTuple{}) == sizeof...(Ops));
+  static_assert(cute::rank(EdgeTuple{}) == sizeof...(Ops));
   static_assert(sizeof...(Ops) > 1);
 
   using Sm90VisitorImpl<Ops...>::Sm90VisitorImpl;
@@ -583,7 +665,7 @@ struct Sm90TopologicalVisitor : Sm90VisitorImpl<Ops...> {
           return frg_compute; // unused
         },
         // Visit the last op
-        [&] (auto const&...) {
+        [&] (auto const&...ops) {
           return cute::detail::apply(frg_compute_tuple,
             // Compute the last op with children inputs
             [&] (auto const&... frg_inputs) {
@@ -601,36 +683,14 @@ struct Sm90TopologicalVisitor : Sm90VisitorImpl<Ops...> {
 
   template <
     bool ReferenceSrc, // do register tensors reference the src or dst layout of the tiled copy
-    class ProblemShapeMNKL,
-    class TileShapeMNK,
-    class TileCoordMNKL,
-    class EpilogueTile,
-    class TiledCopy,
-    class SrcTensor
+    class... Args
   >
   CUTLASS_DEVICE auto
-  get_consumer_store_callbacks(
-      ProblemShapeMNKL problem_shape_mnkl,
-      TileShapeMNK tile_shape_mnk,
-      TileCoordMNKL tile_coord_mnkl,
-      EpilogueTile epi_tile,
-      TiledCopy tiled_copy,
-      int thread_idx,
-      SrcTensor const& tCrC) {
-    return ConsumerStoreCallbacks(
-      Sm90VisitorImpl<Ops...>::
-      get_consumer_store_callbacks<ReferenceSrc>(
-        problem_shape_mnkl,
-        tile_shape_mnk,
-        tile_coord_mnkl,
-        epi_tile,
-        tiled_copy,
-        thread_idx,
-        tCrC
-      )
-    );
+  get_consumer_store_callbacks(ConsumerStoreArgs<Args...> const& args) {
+    auto callbacks_tuple = Sm90VisitorImpl<Ops...>::
+      template get_consumer_store_callbacks<ReferenceSrc>(args);
+    return ConsumerStoreCallbacks<decltype(callbacks_tuple)>(std::move(callbacks_tuple));
   }
-
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -661,6 +721,34 @@ struct Sm90VisitorImplBase<Op0> {
     return Params{
       Op0::to_underlying_arguments(problem_shape, args.op_0, workspace)
     };
+  }
+
+  template <class ProblemShape>
+  static size_t
+  get_workspace_size(ProblemShape const& problem_shape, Arguments const& args) {
+    size_t workspace_size = 0;
+    workspace_size += Op0::get_workspace_size(problem_shape, args.op_0);
+    workspace_size = round_nearest(workspace_size, MinWorkspaceAlignment);
+
+    return workspace_size;
+  }
+
+  template <class ProblemShape>
+  static cutlass::Status
+  initialize_workspace(ProblemShape const& problem_shape, Arguments const& args, void* workspace, cudaStream_t stream,
+    CudaHostAdapter* cuda_adapter = nullptr) {
+    Status status = Status::kSuccess;
+    uint8_t* workspace_ptr = reinterpret_cast<uint8_t*>(workspace);
+    size_t workspace_offset = 0;
+
+    status = Op0::initialize_workspace(problem_shape, args.op_0, workspace_ptr + workspace_offset, stream, cuda_adapter);
+    workspace_offset += Op0::get_workspace_size(problem_shape, args.op_0);
+    workspace_offset = round_nearest(workspace_offset, MinWorkspaceAlignment);
+    if (status != Status::kSuccess) {
+      return status;
+    }
+
+    return status;
   }
 
   CUTLASS_HOST_DEVICE
@@ -696,10 +784,51 @@ struct Sm90VisitorImplBase<Op0, Op1> {
   template <class ProblemShape>
   static constexpr Params
   to_underlying_arguments(ProblemShape const& problem_shape, Arguments const& args, void* workspace) {
+    size_t op_0_workspace_size = Op0::get_workspace_size(problem_shape, args.op_0);
+    uint8_t* op_0_workspace = reinterpret_cast<uint8_t*>(workspace);
+    uint8_t* op_1_workspace = op_0_workspace + op_0_workspace_size;
     return Params{
-      Op0::to_underlying_arguments(problem_shape, args.op_0, workspace),
-      Op1::to_underlying_arguments(problem_shape, args.op_1, workspace)
+      Op0::to_underlying_arguments(problem_shape, args.op_0, op_0_workspace),
+      Op1::to_underlying_arguments(problem_shape, args.op_1, op_1_workspace)
     };
+  }
+
+  template <class ProblemShape>
+  static size_t
+  get_workspace_size(ProblemShape const& problem_shape, Arguments const& args) {
+    size_t workspace_size = 0;
+    workspace_size += Op0::get_workspace_size(problem_shape, args.op_0);
+    workspace_size = round_nearest(workspace_size, MinWorkspaceAlignment);
+
+    workspace_size += Op1::get_workspace_size(problem_shape, args.op_1);
+    workspace_size = round_nearest(workspace_size, MinWorkspaceAlignment);
+
+    return workspace_size;
+  }
+
+  template <class ProblemShape>
+  static cutlass::Status
+  initialize_workspace(ProblemShape const& problem_shape, Arguments const& args, void* workspace, cudaStream_t stream,
+    CudaHostAdapter* cuda_adapter = nullptr) {
+    Status status = Status::kSuccess;
+    uint8_t* workspace_ptr = reinterpret_cast<uint8_t*>(workspace);
+    size_t workspace_offset = 0;
+
+    status = Op0::initialize_workspace(problem_shape, args.op_0, workspace_ptr + workspace_offset, stream, cuda_adapter);
+    workspace_offset += Op0::get_workspace_size(problem_shape, args.op_0);
+    workspace_offset = round_nearest(workspace_offset, MinWorkspaceAlignment);
+    if (status != Status::kSuccess) {
+      return status;
+    }
+
+    status = Op1::initialize_workspace(problem_shape, args.op_1, workspace_ptr + workspace_offset, stream, cuda_adapter);
+    workspace_offset += Op1::get_workspace_size(problem_shape, args.op_1);
+    workspace_offset = round_nearest(workspace_offset, MinWorkspaceAlignment);
+    if (status != Status::kSuccess) {
+      return status;
+    }
+
+    return status;
   }
 
   CUTLASS_HOST_DEVICE
@@ -739,11 +868,64 @@ struct Sm90VisitorImplBase<Op0, Op1, Op2> {
   template <class ProblemShape>
   static constexpr Params
   to_underlying_arguments(ProblemShape const& problem_shape, Arguments const& args, void* workspace) {
+    size_t op_0_workspace_size = Op0::get_workspace_size(problem_shape, args.op_0);
+    size_t op_1_workspace_size = Op1::get_workspace_size(problem_shape, args.op_1);
+    uint8_t* op_0_workspace = reinterpret_cast<uint8_t*>(workspace);
+    uint8_t* op_1_workspace = op_0_workspace + op_0_workspace_size;
+    uint8_t* op_2_workspace = op_1_workspace + op_1_workspace_size;
     return Params{
-      Op0::to_underlying_arguments(problem_shape, args.op_0, workspace),
-      Op1::to_underlying_arguments(problem_shape, args.op_1, workspace),
-      Op2::to_underlying_arguments(problem_shape, args.op_2, workspace)
+      Op0::to_underlying_arguments(problem_shape, args.op_0, op_0_workspace),
+      Op1::to_underlying_arguments(problem_shape, args.op_1, op_1_workspace),
+      Op2::to_underlying_arguments(problem_shape, args.op_2, op_2_workspace)
     };
+  }
+
+  template <class ProblemShape>
+  static size_t
+  get_workspace_size(ProblemShape const& problem_shape, Arguments const& args) {
+    size_t workspace_size = 0;
+    workspace_size += Op0::get_workspace_size(problem_shape, args.op_0);
+    workspace_size = round_nearest(workspace_size, MinWorkspaceAlignment);
+
+    workspace_size += Op1::get_workspace_size(problem_shape, args.op_1);
+    workspace_size = round_nearest(workspace_size, MinWorkspaceAlignment);
+
+    workspace_size += Op2::get_workspace_size(problem_shape, args.op_2);
+    workspace_size = round_nearest(workspace_size, MinWorkspaceAlignment);
+
+    return workspace_size;
+  }
+
+  template <class ProblemShape>
+  static cutlass::Status
+  initialize_workspace(ProblemShape const& problem_shape, Arguments const& args, void* workspace, cudaStream_t stream,
+    CudaHostAdapter* cuda_adapter = nullptr) {
+    Status status = Status::kSuccess;
+    uint8_t* workspace_ptr = reinterpret_cast<uint8_t*>(workspace);
+    size_t workspace_offset = 0;
+
+    status = Op0::initialize_workspace(problem_shape, args.op_0, workspace_ptr + workspace_offset, stream, cuda_adapter);
+    workspace_offset += Op0::get_workspace_size(problem_shape, args.op_0);
+    workspace_offset = round_nearest(workspace_offset, MinWorkspaceAlignment);
+    if (status != Status::kSuccess) {
+      return status;
+    }
+
+    status = Op1::initialize_workspace(problem_shape, args.op_1, workspace_ptr + workspace_offset, stream, cuda_adapter);
+    workspace_offset += Op1::get_workspace_size(problem_shape, args.op_1);
+    workspace_offset = round_nearest(workspace_offset, MinWorkspaceAlignment);
+    if (status != Status::kSuccess) {
+      return status;
+    }
+
+    status = Op2::initialize_workspace(problem_shape, args.op_2, workspace_ptr + workspace_offset, stream, cuda_adapter);
+    workspace_offset += Op2::get_workspace_size(problem_shape, args.op_2);
+    workspace_offset = round_nearest(workspace_offset, MinWorkspaceAlignment);
+    if (status != Status::kSuccess) {
+      return status;
+    }
+
+    return status;
   }
 
   CUTLASS_HOST_DEVICE
@@ -787,12 +969,77 @@ struct Sm90VisitorImplBase<Op0, Op1, Op2, Op3> {
   template <class ProblemShape>
   static constexpr Params
   to_underlying_arguments(ProblemShape const& problem_shape, Arguments const& args, void* workspace) {
+    size_t op_0_workspace_size = Op0::get_workspace_size(problem_shape, args.op_0);
+    size_t op_1_workspace_size = Op1::get_workspace_size(problem_shape, args.op_1);
+    size_t op_2_workspace_size = Op2::get_workspace_size(problem_shape, args.op_2);
+    uint8_t* op_0_workspace = reinterpret_cast<uint8_t*>(workspace);
+    uint8_t* op_1_workspace = op_0_workspace + op_0_workspace_size;
+    uint8_t* op_2_workspace = op_1_workspace + op_1_workspace_size;
+    uint8_t* op_3_workspace = op_2_workspace + op_2_workspace_size;
     return Params{
-      Op0::to_underlying_arguments(problem_shape, args.op_0, workspace),
-      Op1::to_underlying_arguments(problem_shape, args.op_1, workspace),
-      Op2::to_underlying_arguments(problem_shape, args.op_2, workspace),
-      Op3::to_underlying_arguments(problem_shape, args.op_3, workspace)
+      Op0::to_underlying_arguments(problem_shape, args.op_0, op_0_workspace),
+      Op1::to_underlying_arguments(problem_shape, args.op_1, op_1_workspace),
+      Op2::to_underlying_arguments(problem_shape, args.op_2, op_2_workspace),
+      Op3::to_underlying_arguments(problem_shape, args.op_3, op_3_workspace)
     };
+  }
+
+  template <class ProblemShape>
+  static size_t
+  get_workspace_size(ProblemShape const& problem_shape, Arguments const& args) {
+    size_t workspace_size = 0;
+    workspace_size += Op0::get_workspace_size(problem_shape, args.op_0);
+    workspace_size = round_nearest(workspace_size, MinWorkspaceAlignment);
+
+    workspace_size += Op1::get_workspace_size(problem_shape, args.op_1);
+    workspace_size = round_nearest(workspace_size, MinWorkspaceAlignment);
+
+    workspace_size += Op2::get_workspace_size(problem_shape, args.op_2);
+    workspace_size = round_nearest(workspace_size, MinWorkspaceAlignment);
+
+    workspace_size += Op3::get_workspace_size(problem_shape, args.op_3);
+    workspace_size = round_nearest(workspace_size, MinWorkspaceAlignment);
+
+    return workspace_size;
+  }
+
+  template <class ProblemShape>
+  static cutlass::Status
+  initialize_workspace(ProblemShape const& problem_shape, Arguments const& args, void* workspace, cudaStream_t stream,
+    CudaHostAdapter* cuda_adapter = nullptr) {
+    Status status = Status::kSuccess;
+    uint8_t* workspace_ptr = reinterpret_cast<uint8_t*>(workspace);
+    size_t workspace_offset = 0;
+
+    status = Op0::initialize_workspace(problem_shape, args.op_0, workspace_ptr + workspace_offset, stream, cuda_adapter);
+    workspace_offset += Op0::get_workspace_size(problem_shape, args.op_0);
+    workspace_offset = round_nearest(workspace_offset, MinWorkspaceAlignment);
+    if (status != Status::kSuccess) {
+      return status;
+    }
+
+    status = Op1::initialize_workspace(problem_shape, args.op_1, workspace_ptr + workspace_offset, stream, cuda_adapter);
+    workspace_offset += Op1::get_workspace_size(problem_shape, args.op_1);
+    workspace_offset = round_nearest(workspace_offset, MinWorkspaceAlignment);
+    if (status != Status::kSuccess) {
+      return status;
+    }
+
+    status = Op2::initialize_workspace(problem_shape, args.op_2, workspace_ptr + workspace_offset, stream, cuda_adapter);
+    workspace_offset += Op2::get_workspace_size(problem_shape, args.op_2);
+    workspace_offset = round_nearest(workspace_offset, MinWorkspaceAlignment);
+    if (status != Status::kSuccess) {
+      return status;
+    }
+
+    status = Op3::initialize_workspace(problem_shape, args.op_3, workspace_ptr + workspace_offset, stream, cuda_adapter);
+    workspace_offset += Op3::get_workspace_size(problem_shape, args.op_3);
+    workspace_offset = round_nearest(workspace_offset, MinWorkspaceAlignment);
+    if (status != Status::kSuccess) {
+      return status;
+    }
+
+    return status;
   }
 
   CUTLASS_HOST_DEVICE

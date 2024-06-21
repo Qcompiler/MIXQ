@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -71,14 +71,14 @@ public:
 
   struct Arguments {
 
-    cutlass::gemm::GemmCoord*  problem_sizes;
-    cutlass::gemm::GemmCoord   problem_size;
-    ElementNorm*               block_Norm;
-    ElementSum*                block_Sum;
-    int64_t*                   offset_Norm_Device;
-    int64_t*                   offset_Sum_Device;
-    int64_t                    batch_stride_Max;
-    int64_t                    batch_stride_Sum;
+    cutlass::gemm::GemmCoord*  problem_sizes{nullptr};
+    cutlass::gemm::GemmCoord   problem_size{};
+    ElementNorm*               block_Norm{nullptr};
+    ElementSum*                block_Sum{nullptr};
+    int64_t*                   offset_Norm_Device{nullptr};
+    int64_t*                   offset_Sum_Device{nullptr};
+    int64_t                    batch_stride_Max{0};
+    int64_t                    batch_stride_Sum{0};
 
     //
     // Methods

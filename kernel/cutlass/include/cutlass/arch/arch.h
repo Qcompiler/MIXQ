@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -41,7 +41,7 @@
 namespace cutlass {
 namespace arch {
 
-#if defined(__NVCC__) || (defined(__clang__) && defined(__CUDA__))
+#if defined(__NVCC__) || defined(__CUDACC_RTC__) || (defined(__clang__) && defined(__CUDA__))
 
 /// Computes laneId within a warp
 CUTLASS_DEVICE
@@ -85,6 +85,9 @@ struct Sm80 {
 };
 struct Sm86 {
   static int const kMinComputeCapability = 86;
+};
+struct Sm89 {
+  static int const kMinComputeCapability = 89;
 };
 struct Sm90 {
   static int const kMinComputeCapability = 90; 

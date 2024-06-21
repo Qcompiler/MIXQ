@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -260,7 +260,7 @@ private:
     if (options.vectorize <= 2) return std::make_pair(false, -1);
 
     // Boundary check.
-    if (i > elements.size() || (i + options.vectorize - 1) > elements.size())
+    if (i > int(elements.size()) || (i + options.vectorize - 1) > int(elements.size()))
       return std::make_pair(false, -1);
 
     // Check if either all elements are valid or invalid.

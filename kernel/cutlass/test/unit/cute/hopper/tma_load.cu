@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -44,7 +44,6 @@ test_tma_load(GMEM_Layout const& gmem_layout,
               SMEM_Layout const& smem_layout,
               CTA_Tile    const& cta_tile)
 {
-  using namespace cute;
   return test_tma_load<T, TmaType>(SM90_TMA_LOAD{}, gmem_layout, smem_layout, cta_tile);
 }
 
@@ -53,7 +52,6 @@ auto
 test_tma_load(GMEM_Layout const& gmem_layout,
               SMEM_Layout const& smem_layout)
 {
-  using namespace cute;
   return test_tma_load<T, TmaType>(gmem_layout, smem_layout, product_each(shape(smem_layout)));
 }
 
@@ -416,7 +414,6 @@ TEST(SM90_CuTe_Hopper, Tma_Load_InternalType)
   test_tma_load<half_t, uint64_t>(gmem_layout, smem_layout);
   test_tma_load< float, uint64_t>(gmem_layout, smem_layout);
   test_tma_load<double, uint64_t>(gmem_layout, smem_layout);
-
   }
 
   // Complex<double> is 128bit, which the TMA has no concept of

@@ -1,4 +1,4 @@
-# Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -38,9 +38,27 @@ else()
 endif()
 
 message(STATUS "CMake Version: ${CMAKE_VERSION}")
-set(IMPLICIT_CMAKE_CXX_STANDARD OFF CACHE BOOL "Do not explicitly specify -std=c++11 if set")
+set(IMPLICIT_CMAKE_CXX_STANDARD OFF CACHE BOOL "Do not explicitly specify -std=c++17 if set")
 
-project(CUTLASS VERSION 3.2.1 LANGUAGES CXX)
+# To reduce duplicate version locations, parse the version out of the
+# main versions.h file and reuse it here.
+
+file(READ ${CMAKE_CURRENT_SOURCE_DIR}/include/cutlass/version.h VERSION_FILE_CONTENTS)
+string(REGEX MATCH "#define CUTLASS_MAJOR ([0-9]+)" _CUTLASS_VERSION_MAJOR "${VERSION_FILE_CONTENTS}")
+set(_CUTLASS_VERSION_MAJOR ${CMAKE_MATCH_1})
+string(REGEX MATCH "#define CUTLASS_MINOR ([0-9]+)" _CUTLASS_VERSION_MINOR "${VERSION_FILE_CONTENTS}")
+set(_CUTLASS_VERSION_MINOR ${CMAKE_MATCH_1})
+string(REGEX MATCH "#define CUTLASS_PATCH ([0-9]+)" _CUTLASS_VERSION_PATCH "${VERSION_FILE_CONTENTS}")
+set(_CUTLASS_VERSION_PATCH ${CMAKE_MATCH_1})
+
+message(STATUS "CUTLASS ${_CUTLASS_VERSION_MAJOR}.${_CUTLASS_VERSION_MINOR}.${_CUTLASS_VERSION_PATCH}")
+
+## CUTLASS PROJECT #############################################################
+
+project(CUTLASS VERSION ${_CUTLASS_VERSION_MAJOR}.${_CUTLASS_VERSION_MINOR}.${_CUTLASS_VERSION_PATCH} LANGUAGES CXX)
+
+################################################################################
+
 include(${CMAKE_CURRENT_SOURCE_DIR}/CUDA.cmake)
 
 if (CUDA_VERSION VERSION_LESS 11.3)
@@ -49,14 +67,13 @@ elseif (CUDA_VERSION VERSION_LESS 11.4)
   message(WARNING "CUTLASS ${CUTLASS_VERSION} support for CUDA ${CUDA_VERSION} is deprecated, please use CUDA 11.8 or higher.")
 endif()
 
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7.5)
-  message(FATAL_ERROR "GCC version must be at least 7.5!")
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7.3)
+  message(FATAL_ERROR "GCC version must be at least 7.3!")
 endif()
 
 if (CUDA_COMPILER MATCHES "[Cc]lang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7.0)
   message(FATAL_ERROR "Clang 7.0+ required for GPU compilation")
 endif()
-
 find_package(Doxygen QUIET)
 
 ################################################################################
@@ -86,19 +103,6 @@ set(CUTLASS_TEST_LEVEL "0" CACHE STRING "Level of tests to compile.")
 # 0 - Sanity, 1 - Release-Quality, 2 - Exhaustive
 
 find_package(Python3 3.5 COMPONENTS Interpreter REQUIRED)
-
-# Install cutlass_library Python package
-execute_process(
-  WORKING_DIRECTORY ${CUTLASS_DIR}/python
-  COMMAND ${Python3_EXECUTABLE} ${CUTLASS_DIR}/python/setup_library.py develop --user
-  RESULT_VARIABLE cutlass_lib_GENERATOR_INSTALL_RESULT
-  OUTPUT_FILE ${CMAKE_CURRENT_BINARY_DIR}/cutlass_library_installation.log
-  ERROR_FILE ${CMAKE_CURRENT_BINARY_DIR}/cutlass_library_installation.log
-)
-
-if(NOT cutlass_lib_GENERATOR_INSTALL_RESULT EQUAL 0)
-  message(FATAL_ERROR "Error installing cutlass_library package. See ${CMAKE_CURRENT_BINARY_DIR}/cutlass_library_installation.log")
-endif()
 
 ################################################################################
 set(CUTLASS_ENABLE_HEADERS_ONLY OFF CACHE BOOL "Enable only the header library")
@@ -163,6 +167,7 @@ endif()
 include(GNUInstallDirs)
 
 link_directories(${CUDA_TOOLKIT_ROOT_DIR}/lib64/stubs)
+link_directories(${CUDA_TOOLKIT_ROOT_DIR}/lib64)
 
 ###################################################################################################
 #
@@ -190,6 +195,9 @@ if(WIN32)
   # On Windows we link against the shared (DLL) runtime. Change gtest settings to match this.
   set(gtest_force_shared_crt ON CACHE BOOL "Use shared (DLL) run-time lib even when Google Test is built as static lib" FORCE)
 endif()
+
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DCUTLASS_VERSIONS_GENERATED")
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -DCUTLASS_VERSIONS_GENERATED")
 
 if (WIN32)
   # Enable more warnings.  Add "-Xcompiler=/WX" to enable warnings as errors.
@@ -220,6 +228,32 @@ set(CUTLASS_ENABLE_F16C OFF CACHE BOOL "Enable F16C x86 extensions in host code.
 #
 # CUTLASS generator cmake configuration
 #
+
+# Kernel unified filter file
+
+set(KERNEL_FILTER_FILE "" CACHE STRING "KERNEL FILTER FILE FULL PATH")
+
+if (KERNEL_FILTER_FILE AND NOT CUTLASS_LIBRARY_KERNELS) 
+  # If a kernel filter file is specified, we want to generate and then
+  # filter on the entire kernel set, not the default kernel
+  # (sub)set. The user may overried CUTLASS_LIBRRARY_KERNELS, in which
+  # case the resulting kernel set will be the intersection of the two
+  # options differenced against CUTLASS_LIBRARY_IGNORE_KERNELS.
+  set(CUTLASS_LIBRARY_KERNELS_INIT "*")
+else() 
+  set(CUTLASS_LIBRARY_KERNELS_INIT "") 
+endif()
+
+if (KERNEL_FILTER_FILE)
+  get_filename_component(KERNEL_FILTER_FILE "${KERNEL_FILTER_FILE}" ABSOLUTE)
+  set(KERNEL_FILTER_FILE "${KERNEL_FILTER_FILE}" CACHE STRING "KERNEL FILTER FILE FULL PATH" FORCE)
+endif()
+
+set(SELECTED_KERNEL_LIST "selected" CACHE STRING "Name of the filtered kernel list")
+
+if(KERNEL_FILTER_FILE)
+  message(STATUS "Full path of filter file: ${KERNEL_FILTER_FILE}")
+endif()
 
 set(CUTLASS_LIBRARY_OPERATIONS "all" CACHE STRING "Comma delimited list of operation name filters. Default '' means all operations are enabled.")
 set(CUTLASS_LIBRARY_KERNELS ${CUTLASS_LIBRARY_KERNELS_INIT} CACHE STRING "Comma delimited list of kernel name filters. If unspecified, only the largest tile size is enabled. If 'all' is specified, all kernels are enabled.")
@@ -298,6 +332,18 @@ endif()
 
 
 
+# Warnings-as-error exceptions and warning suppressions for Clang builds
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=implicit-int-conversion ")
+  list(APPEND CUTLASS_CUDA_NVCC_FLAGS "-Wno-error=implicit-int-conversion" )
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=pass-failed ")
+  list(APPEND CUTLASS_CUDA_NVCC_FLAGS "-Wno-error=pass-failed" )
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=inconsistent-missing-override ")
+  list(APPEND CUTLASS_CUDA_NVCC_FLAGS "-Wno-error=inconsistent-missing-override" )
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-sign-conversion ")
+  list(APPEND CUTLASS_CUDA_NVCC_FLAGS "-Wno-sign-conversion" )
+endif()
+
 if (NOT MSVC AND CUTLASS_NVCC_KEEP)
   # MSVC flow handles caching already, but for other generators we handle it here.
   set(CUTLASS_NVCC_KEEP_DIR ${CMAKE_CURRENT_BINARY_DIR}/tmp CACHE PATH "Location to store NVCC scratch files")
@@ -323,6 +369,7 @@ if (CUTLASS_ENABLE_OPENMP_TESTS)
     message(WARNING "CUTLASS_ENABLE_OPENMP_TESTS set but OpenMP not found.")
   endif()
 endif()
+
 if(UNIX)
   list(APPEND CUTLASS_CUDA_NVCC_FLAGS -Xcompiler=-Wconversion)
   list(APPEND CUTLASS_CUDA_NVCC_FLAGS -Xcompiler=-fno-strict-aliasing)
@@ -576,8 +623,8 @@ if (NOT DEFINED CUTLASS_REVISION)
 endif()
 
 configure_file(
-  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.h.in
-  ${CMAKE_CURRENT_BINARY_DIR}/include/cutlass/version.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/version_extended.h.in
+  ${CMAKE_CURRENT_BINARY_DIR}/include/cutlass/version_extended.h
   @ONLY)
 
 target_include_directories(
@@ -694,6 +741,12 @@ endif()
 
 ################################################################################
 
+set(CUTLASS_DEFAULT_ACTIVE_TEST_SETS "default" CACHE STRING "Default
+  activated test sets. In `make test` mode, this string determines the
+  active set of tests. In `ctest` mode, this value can be overriden
+  with CUTLASS_TEST_SETS environment variable when running the ctest
+  executable.")
+
 set(CUTLASS_CTEST_TEMPLATE_FILE ${CMAKE_CURRENT_LIST_DIR}/cmake/CTestTestfile.configure.cmake)
 set(CUTLASS_CTEST_GENERATED_FILES "" CACHE INTERNAL "")
 
@@ -714,11 +767,12 @@ function(cutlass_add_executable_tests NAME TARGET)
 #   generating the full variable name to be referenced.
 # RESULT_CACHE_FILE: A file to be installed alongside the test executable with pre-computed
 #   test results to speed up test runtime.
+# TEST_SETS_SUPPORTED: A list of test set names these tests support. 
 # 
 
   set(options DISABLE_EXECUTABLE_INSTALL_RULE)
   set(oneValueArgs DISABLE_TESTS RESULT_CACHE_FILE TEST_COMMAND_OPTIONS_PREFIX)
-  set(multiValueArgs DEPENDS DEPENDEES TEST_COMMAND_OPTIONS)
+  set(multiValueArgs DEPENDS DEPENDEES TEST_COMMAND_OPTIONS TEST_SETS_SUPPORTED)
   cmake_parse_arguments(_ "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
   if (NOT DEFINED __DISABLE_TESTS)
@@ -727,6 +781,12 @@ function(cutlass_add_executable_tests NAME TARGET)
 
   set(TEST_EXE $<TARGET_FILE_NAME:${TARGET}>)
   set(TEST_EXE_WORKING_DIRECTORY ./${CMAKE_INSTALL_BINDIR})
+
+  if (NOT DEFINED __TEST_SETS_SUPPORTED)
+    set(__TEST_SETS_SUPPORTED ${CUTLASS_DEFAULT_ACTIVE_TEST_SETS})
+  endif()
+
+  set(TEST_SETS_SUPPORTED ${__TEST_SETS_SUPPORTED})
 
   if (__RESULT_CACHE_FILE)
 
@@ -883,7 +943,12 @@ if (CUTLASS_INSTALL_TESTS)
 
   file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/ctest")
 
-  file(WRITE "${CMAKE_BINARY_DIR}/ctest/CTestTestfile.cmake" "# Generated File\n")
+  file(WRITE "${CMAKE_BINARY_DIR}/ctest/CTestTestfile.cmake" "# Generated File\n\n")
+  file(APPEND "${CMAKE_BINARY_DIR}/ctest/CTestTestfile.cmake" "cmake_policy(SET CMP0057 NEW) # Allow IN_LIST for if()\n\n")
+  file(APPEND "${CMAKE_BINARY_DIR}/ctest/CTestTestfile.cmake" "if (NOT DEFINED ENV{CUTLASS_TEST_SETS})\n")
+  file(APPEND "${CMAKE_BINARY_DIR}/ctest/CTestTestfile.cmake" "  set(ENV{CUTLASS_TEST_SETS} ${CUTLASS_DEFAULT_ACTIVE_TEST_SETS})\n")
+  file(APPEND "${CMAKE_BINARY_DIR}/ctest/CTestTestfile.cmake" "endif()\n\n")
+
   foreach(GENERATED_FILE ${CUTLASS_CTEST_GENERATED_FILES})
     file(APPEND "${CMAKE_BINARY_DIR}/ctest/CTestTestfile.cmake" "include(${GENERATED_FILE})\n")
   endforeach()
@@ -903,9 +968,15 @@ write_basic_package_version_file(
   ${CMAKE_CURRENT_BINARY_DIR}/NvidiaCutlassConfigVersion.cmake 
   COMPATIBILITY AnyNewerVersion)
 
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/NvidiaCutlassConfig.cmake.in
+  ${CMAKE_CURRENT_BINARY_DIR}/NvidiaCutlassConfig.cmake  
+  @ONLY
+  )
+
 install(
   FILES 
-    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/NvidiaCutlassConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/NvidiaCutlassConfig.cmake  
     ${CMAKE_CURRENT_BINARY_DIR}/NvidiaCutlassConfigVersion.cmake 
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/NvidiaCutlass/
   )

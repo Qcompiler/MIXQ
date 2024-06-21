@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,9 +30,9 @@
  **************************************************************************************************/
 #pragma once
 
-#include <cute/config.hpp>
-#include <cute/util/type_traits.hpp>
 #include <cutlass/complex.h>
+#include <cute/util/type_traits.hpp>
+#include <cute/numeric/numeric_types.hpp>
 
 namespace cute
 {
@@ -44,6 +44,9 @@ using cutlass::real;
 using cutlass::imag;
 using cutlass::conj;
 
+template <class T>
+static constexpr auto is_complex_v = is_complex<T>::value;
+
 /// Fused multiply-add for complex numbers
 template <class T>
 CUTE_HOST_DEVICE constexpr
@@ -53,10 +56,10 @@ fma(complex<T>      & d,
     complex<T> const& b,
     complex<T> const& c)
 {
-  d.real(fma( a.real(), b.real(), c.real()));
-  d.imag(fma( a.real(), b.imag(), c.imag()));
-  d.real(fma(-a.imag(), b.imag(), d.real()));
-  d.imag(fma( a.imag(), b.real(), d.imag()));
+  fma(d.real(),  a.real(), b.real(), c.real());
+  fma(d.imag(),  a.real(), b.imag(), c.imag());
+  fma(d.real(), -a.imag(), b.imag(), d.real());
+  fma(d.imag(),  a.imag(), b.real(), d.imag());
 }
 
 /// Fused multiply-add for triplets

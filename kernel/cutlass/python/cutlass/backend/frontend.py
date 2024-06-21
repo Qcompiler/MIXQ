@@ -1,6 +1,6 @@
-################################################################################
+#################################################################################################
 #
-# Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved
+# Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -28,21 +28,13 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
-################################################################################
+#################################################################################################
 
 from cuda import cuda
 import numpy as np
 
 from cutlass.backend.memory_manager import device_mem_alloc, todevice
-from cutlass.backend.utils.software import CheckPackages
-
-torch_available = CheckPackages().check_torch()
-if torch_available:
-    import torch
-
-cupy_available = CheckPackages().check_cupy()
-if cupy_available:
-    import cupy as cp
+from cutlass.utils.datatypes import is_cupy_tensor, is_numpy_tensor, is_torch_tensor
 
 
 class NumpyFrontend:
@@ -97,6 +89,7 @@ class CupyFrontend:
     def argument(cupy_ndarray: "cp.ndarray"):
         return cuda.CUdeviceptr(int(cupy_ndarray.data.ptr))
 
+
 class TensorFrontend:
     """
     Universal Frontend for client-provide tensors
@@ -104,11 +97,11 @@ class TensorFrontend:
 
     @staticmethod
     def argument(tensor, is_output=False):
-        if isinstance(tensor, np.ndarray):
+        if is_numpy_tensor(tensor):
             return NumpyFrontend.argument(tensor, is_output)
-        elif torch_available and isinstance(tensor, torch.Tensor):
+        elif is_torch_tensor(tensor):
             return TorchFrontend.argument(tensor)
-        elif cupy_available and isinstance(tensor, cp.ndarray):
+        elif is_cupy_tensor(tensor):
             return CupyFrontend.argument(tensor)
         else:
             raise NotImplementedError("Unknown Tensor Type")

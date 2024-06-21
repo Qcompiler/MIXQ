@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -95,6 +95,11 @@ template <typename OperatorClass> struct ArchMap<arch::Sm80, OperatorClass> {
 template <typename OperatorClass> struct ArchMap<arch::Sm86, OperatorClass> {
   static int const kMin = 86;
   static int const kMax = 1024;
+};
+
+template <typename OperatorClass> struct ArchMap<arch::Sm89, OperatorClass> {
+  static int const kMin = 89;
+  static int const kMax = 89;
 };
 
 template <typename OperatorClass> struct ArchMap<arch::Sm90, OperatorClass> {

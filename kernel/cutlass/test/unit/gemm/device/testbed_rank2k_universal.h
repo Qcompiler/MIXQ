@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -285,7 +285,7 @@ struct TestbedRank2KUniversal {
     // Determine SMEM requirements and waive if not satisfied
     //
 
-    int smem_size = int(sizeof(typename Rank2K::Rank2Kkernel::SharedStorage));
+    size_t smem_size = sizeof(typename Rank2K::Rank2Kkernel::SharedStorage);
 
     cudaDeviceProp properties;
     int device_idx;

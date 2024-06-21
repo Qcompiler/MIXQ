@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -34,6 +34,7 @@
 Compute the shared memory size in bytes
 """
 
+import cutlass_library
 from pycute import shape_div, product
 
 import cutlass
@@ -56,10 +57,13 @@ class GetSmemSize:
     def sm90_epilogue_tile(self, tile_description):
         # Get the epilogue tile size
         schedule = tile_description.epilogue_schedule
-        if schedule == cutlass.EpilogueScheduleType.TmaWarpSpecialized:
+        if schedule == cutlass_library.EpilogueScheduleType.TmaWarpSpecialized:
             epilogue_tile_mn = (64, 32)
-        elif schedule == cutlass.EpilogueScheduleType.TmaWarpSpecializedCooperative:
-            epilogue_tile_mn = (128, 32)
+        elif schedule == cutlass_library.EpilogueScheduleType.TmaWarpSpecializedCooperative:
+            if tile_description.threadblock_shape[0] >= 128:
+                epilogue_tile_mn = (128, 32)
+            else:
+                epilogue_tile_mn = (64, 32)
         else:
             raise NotImplementedError(f"Unsupported schedule: {schedule}")
 

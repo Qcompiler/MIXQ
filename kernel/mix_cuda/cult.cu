@@ -5,6 +5,7 @@
 #include "util.h"
 #include<cuda_fp16.h>
  
+#define MAX(a, b) (a) > (b) ? (a) : (b)
 #define BLOCK_ROWS 256
 #define BLOCK_COLS 128
 
@@ -275,8 +276,158 @@ __global__ void set_value(half* input, half* mat1, half*mat2){
 
  
 
-// op3 按照列 计算四次，需要额外的寄存器，不需要额外的共享内存
-__global__ void mmaNaiveKernelop3(const half *__restrict__ A, const half *__restrict__ B, half *__restrict__ C, size_t M,
+__global__ void mmaNaiveKernelop3fusedequantsm90(const half *__restrict__ A, const half *__restrict__ B, half *__restrict__ C, 
+                                const half *__restrict__ scale_A, const half *__restrict__ scale_B,
+                                const int32_t * C_int,
+                                size_t M,
+                                size_t N, size_t K) {
+    const size_t K_tiles =  K / MMA_K; // 这儿应该是不能超过K个 你如不足16个 那么后面的16个就不能用向量化的方式导入了
+
+    const size_t warp_row = blockIdx.y * MMA_M * WARP_REPEAT_M;
+    const size_t warp_col = blockIdx.x * MMA_N;
+
+    if (warp_row >= M || warp_col >= N) {
+        return;
+    }
+
+    __shared__ half A_smem[MMA_M][MMA_K];
+    __shared__ half B_smem[MMA_N][MMA_K];
+    __shared__ half C_smem[WARP_REPEAT_M*MMA_M][MMA_N];
+
+    __shared__ int ind_smem[2][8];
+
+    const int lane_id = threadIdx.x % WARP_SIZE;
+
+    uint32_t RC[WARP_REPEAT_M][2];
+    for (int i = 0; i < WARP_REPEAT_M; ++i){
+        RC[i][0]  = 0;
+        RC[i][1]  = 0;
+    }
+
+
+// #pragma unroll
+    half * targetA = nullptr;
+    half * targetB = nullptr;
+    const half * sourceB = nullptr;
+    const half * sourceA = nullptr;
+    if ( K_tiles ){
+        targetA = &A_smem[lane_id / 2][0] + (lane_id % 2) * 8;
+        sourceA =  A + (warp_row + lane_id / 2) * K;
+        // 一个int4 16字节
+        // 需要写八个 half (每个 2 字节)
+        if (lane_id < MMA_N * 2){
+            targetB = &B_smem[lane_id / 2][0] + (lane_id % 2) * 8;
+            sourceB =  B + (warp_col + lane_id / 2) * K;
+        }
+    }
+    // 一次放128个
+     
+
+    for (size_t i = 0; i < K_tiles; ++i) {
+
+        __syncthreads();
+
+        for (int kk = 0 ; kk < WARP_REPEAT_M ; ++kk ){
+
+            const half * sourceA_ = sourceA + kk * MMA_M * K;
+            *((int4 *) targetA) =  *((int4 *) sourceA_); 
+
+            if (lane_id < MMA_N * 2)
+                *((int4 *)(&B_smem[lane_id / 2][0]) + lane_id % 2) =
+                *((int4 *)(&B[i * MMA_K + (warp_col + lane_id / 2) * K]) + lane_id % 2);
+        
+            
+            __syncthreads();
+
+            uint32_t RA[4] = {0,0,0,0};
+            uint32_t RB[2] = {0,0};
+
+            uint32_t A_smem_lane_addr = __cvta_generic_to_shared(&A_smem[lane_id % 16][(lane_id / 16) * 8]);
+            LDMATRIX_X4(RA[0], RA[1], RA[2], RA[3], A_smem_lane_addr);
+
+            uint32_t B_smem_lane_addr = __cvta_generic_to_shared(&B_smem[lane_id % 8][((lane_id / 8) % 2) * 8]);
+            LDMATRIX_X2(RB[0], RB[1], B_smem_lane_addr);
+
+            HMMA16816(RC[kk][0], RC[kk][1], RA[0], RA[1], RA[2], RA[3], RB[0], RB[1], RC[kk][0], RC[kk][1]);
+
+            __syncthreads();
+        }
+    }
+
+
+    if ( K % MMA_K )
+    {
+
+        // 把shared memory 设置成 0
+        half *tmp1 = (half *)((int4 *)(&A_smem[lane_id / 2][0]) + lane_id % 2);
+            for (int i = 0 ; i < 8; ++i)  tmp1[i] = 0.0;
+
+        if (lane_id < MMA_N * 2){
+            half *tmp2 =  (half *)((int4 *)(&B_smem[lane_id / 2][0]) + lane_id % 2);
+            for (int i = 0 ; i < 8; ++i)  tmp2[i] = 0.0;
+        }
+
+        int stride = K - K_tiles * MMA_K;
+
+        int ptrl =  min ( (stride - (lane_id % 2) * 8), 8) ; 
+ 
+
+        for (int kk = 0 ; kk < WARP_REPEAT_M ; ++kk )
+        {
+            if (ptrl > 0){
+                targetA = &A_smem[lane_id / 2][0]  + (lane_id % 2) * 8;
+                sourceA = &A[(kk * MMA_M + warp_row + lane_id / 2) * K] ;
+                if (lane_id < MMA_N * 2){
+                    targetB = &B_smem[lane_id / 2][0] + (lane_id % 2) * 8;
+                    sourceB = &B[ (warp_col + lane_id / 2) * K] ; 
+                }
+                // int id =  K_tiles * MMA_K + (lane_id % 2) * 8  ;
+                for (int j = 0 ; j < ptrl; ++j){ 
+                     
+                    targetA[j] = sourceA[ j];           
+                    if (lane_id < MMA_N * 2) {    
+                        targetB[j] = sourceB[j]; 
+                    }         
+                }
+            }
+            __syncthreads();
+            uint32_t RA[4] = {0,0,0,0};
+            uint32_t RB[2] = {0,0};
+            uint32_t A_smem_lane_addr = __cvta_generic_to_shared(&A_smem[lane_id % 16][(lane_id / 16) * 8]);
+            LDMATRIX_X4(RA[0], RA[1], RA[2], RA[3], A_smem_lane_addr);
+
+            uint32_t B_smem_lane_addr = __cvta_generic_to_shared(&B_smem[lane_id % 8][((lane_id / 8) % 2) * 8]);
+            LDMATRIX_X2(RB[0], RB[1], B_smem_lane_addr);
+
+            HMMA16816(RC[kk][0], RC[kk][1], RA[0], RA[1], RA[2], RA[3], RB[0], RB[1], RC[kk][0], RC[kk][1]);
+
+            __syncthreads();  
+        }
+        
+    }
+
+    
+
+    *((uint32_t *)(&C_smem[lane_id / 4][0]) + lane_id % 4) = RC[0][0];
+    *((uint32_t *)(&C_smem[ lane_id / 4 + 8][0]) + lane_id % 4) = RC[0][1];
+    *((uint32_t *)(&C_smem[ MMA_M + lane_id / 4][0]) + lane_id % 4) = RC[1][0];
+    *((uint32_t *)(&C_smem[ MMA_M + lane_id / 4 + 8][0]) + lane_id % 4) = RC[1][1];
+
+    __syncthreads();
+
+     if (lane_id < MMA_M) {
+
+
+       *((double2 *)(&C[( warp_row + lane_id) * N + warp_col])) = *reinterpret_cast<double2*>(C_smem[ lane_id]);
+       *((double2 *)(&C[( MMA_M + warp_row + lane_id) * N + warp_col])) = *reinterpret_cast<double2*>(C_smem[ MMA_M + lane_id]);
+
+     }
+}
+
+ 
+ 
+
+ __global__ void mmaNaiveKernelop3(const half *__restrict__ A, const half *__restrict__ B, half *__restrict__ C, size_t M,
                                size_t N, size_t K, const int* ind, size_t lenind) {
     const size_t K_tiles =  lenind / MMA_K; // 这儿应该是不能超过K个 你如不足16个 那么后面的16个就不能用向量化的方式导入了
 
@@ -429,9 +580,6 @@ __global__ void mmaNaiveKernelop3(const half *__restrict__ A, const half *__rest
 
      }
 }
-
- 
- 
  
 // num warp = 4 的时候 总共的warp数量变成了16
 template<int MMA, int NUM_WARP, int REPEATK>
@@ -556,8 +704,22 @@ void mmaNaiveop3(half *A, half *B, half *C, size_t M, size_t N, size_t K, const 
     mmaNaiveKernelop3<<<grid, block>>>(A, B, C, M, N, K, ind, lenind);
 }
 
+// mat1_ptr, mat2_ptr, output_ptr, a_ptr, b_ptr, c_ptr, m, n, k
+
+void mmaNaiveop3fusedequantsm90(const half *A, const half *B, half *C, const half *scale_A, const half *scale_B, const int32_t *C_int, size_t M, size_t N, size_t K) {
+  
+    // 优化1 :  每一个 block   算 4倍多的矩阵乘法
+    dim3 block(WARP_SIZE);
+    dim3 grid(div_ceil(N, MMA_N), div_ceil(M/WARP_REPEAT_M, MMA_M));
+     int STAGES = 1;
+    int smem_size = MAX(STAGES * 128 * 32 * 2 * 2, 128 * 128 * 4);
+ 
+    cudaFuncSetAttribute(mmaNaiveKernelop3fusedequantsm90,cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                    smem_size);
 
 
+    mmaNaiveKernelop3fusedequantsm90<<<grid, block, smem_size, at::cuda::getCurrentCUDAStream()>>>(A, B, C, scale_A, scale_B, C_int, M, N, K);
+}
 
 
 
@@ -855,7 +1017,7 @@ __global__ void matmul(half *A, half *B, half *C, int M, int N, int K, float alp
 }
 
 
-#define MAX(a, b) (a) > (b) ? (a) : (b)
+
 torch::Tensor Mixgemmalligned(
     const torch::Tensor& ind,
     size_t lenid,
@@ -1983,11 +2145,17 @@ torch::Tensor int8FusedDequantizeCUDA(
 }
 
 
+
+
 torch::Tensor int8FusedDequantize(const torch::Tensor &A,
                                   const torch::Tensor &B,
                                   const torch::Tensor &scale_row,
                                   const torch::Tensor &scale_col,
                                   const torch::Tensor &y,  int M, int N, int K) {
+
+
+
+                                    
   torch::checkAllContiguous("int8FusedDequantize", {{A, "A", 0},
                                                     {B, "B", 1},
                                                     {scale_row, "scale_row", 2},
@@ -2555,11 +2723,13 @@ __global__ void FindRowScaleKernel4bit(Int4Storage * output,
     for (int i = tid ; i < colsDst; i += size){
         __half data1  = __hdiv( start[2*i + 0], quant_scales );
         __half data2  = __hdiv( start[2*i + 1], quant_scales );
-        Int4Subbyte{reinterpret_cast<cutlass::int4b_t *>(&storage), 0}.set(
-            __half2int_rn(data1));
+
+        // this shoud be build with old cutlass
+        // Int4Subbyte{reinterpret_cast<cutlass::int4b_t *>(&storage), 0}.set(
+        //     __half2int_rn(data1));
         
-        Int4Subbyte{reinterpret_cast<cutlass::int4b_t *>(&storage), 1}.set(
-            __half2int_rn(data2));            
+        // Int4Subbyte{ reinterpret_cast<cutlass::int4b_t *>(&storage), 1}.set(
+        //     __half2int_rn(data2));            
         d_out[i] =  storage ; 
     }
     __syncthreads();    
@@ -2948,8 +3118,41 @@ void mmaNaiveREPEATK(half *A, half *B, half *C, size_t M, size_t N, size_t K, co
 
 
 
-
 // totally dense compute
+torch::Tensor MixgemmDenseFusedequantSM90(
+    const torch::Tensor& mat1, //fp16
+    const torch::Tensor& mat2,  //fp16
+    const torch::Tensor& scale_a, //fp16
+    const torch::Tensor& scale_b,  //fp16
+    const torch::Tensor& C // int32
+
+
+    ){
+  auto m = mat1.sizes()[0];
+  auto n = mat2.sizes()[0];
+  auto k = mat1.sizes()[1];
+
+ 
+
+  auto options = torch::TensorOptions().dtype(torch::kFloat16).device(mat1.device());  
+  at::Tensor output = torch::zeros({m, n}, options);
+
+    half* output_ptr = (  half *)output.data_ptr<at::Half>();
+  const half* mat1_ptr = ( const half *)mat1.data_ptr<at::Half>();
+  const half* mat2_ptr = ( const half *)mat2.data_ptr<at::Half>();
+ 
+  const half* a_ptr = (const half *)scale_a.data_ptr<at::Half>();
+  const half* b_ptr = (const half *)scale_b.data_ptr<at::Half>();
+  const int32_t* c_ptr = (const int32_t *)C.data_ptr<int>();
+    
+  mmaNaiveop3fusedequantsm90(mat1_ptr, mat2_ptr, output_ptr, a_ptr, b_ptr, c_ptr, m, n, k);
+
+  return output;
+}
+
+
+
+// sparse dense compute
 torch::Tensor Mixgemm(
     const torch::Tensor& ind,
     size_t lenid,
@@ -2960,10 +3163,7 @@ torch::Tensor Mixgemm(
   auto n = mat2.sizes()[0];
   auto k = mat1.sizes()[1];
 
-  std::cout <<" k is" << k<<  std::endl;
-std::cout <<" k is" << m<<  std::endl;
-std::cout <<" k is" << n<<  std::endl;
-
+ 
 
   auto options = torch::TensorOptions().dtype(torch::kFloat16).device(mat1.device());  
   at::Tensor input = torch::zeros({m, n}, options);

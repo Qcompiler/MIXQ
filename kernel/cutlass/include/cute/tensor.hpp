@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,16 +33,15 @@
 #include <cute/config.hpp>
 
 #include <cute/util/type_traits.hpp>
-#include <cute/container/tuple.hpp>
-#include <cute/container/array_aligned.hpp>
-#include <cute/container/array_subbyte.hpp>
-#include <cute/container/type_list.hpp>
 #include <cute/numeric/integral_constant.hpp>
 #include <cute/numeric/integer_sequence.hpp>
 
-#include <cute/layout.hpp>
-#include <cute/tile.hpp>
+#include <cute/container/tuple.hpp>
+#include <cute/container/array_aligned.hpp>
+#include <cute/container/array_subbyte.hpp>
+
 #include <cute/pointer.hpp>
+#include <cute/layout.hpp>
 
 namespace cute
 {
@@ -52,63 +51,54 @@ namespace cute
 //
 
 // concept Engine {
-//   using value_type = ;
+//   using iterator     = ;
+//   using value_type   = ;
+//   using element_type = ;
+//   using reference    = ;
 //   iterator begin();
 // };
 
 template <class T, int N>
-using ArrayEngine = typename conditional<(sizeof_bits<T>::value % 8 == 0),
-                                              array_aligned<T,N>,
-                                              array_subbyte<T,N>>::type;
+struct ArrayEngine
+{
+  using Storage = typename conditional<(sizeof_bits<T>::value % 8 == 0),
+                                       array_aligned<T,N>,
+                                       array_subbyte<T,N>>::type;
+  using iterator     = typename Storage::iterator;
+  using reference    = typename iterator_traits<iterator>::reference;
+  using element_type = typename iterator_traits<iterator>::element_type;
+  using value_type   = typename iterator_traits<iterator>::value_type;
+  Storage storage_;
+
+  CUTE_HOST_DEVICE constexpr auto begin() const { return storage_.begin(); }
+  CUTE_HOST_DEVICE constexpr auto begin()       { return storage_.begin(); }
+};
 
 template <class Iterator>
 struct ViewEngine
 {
-  using value_type = typename cute::remove_cvref<decltype(*declval<Iterator>())>::type;
-
-  using iterator = Iterator;
+  using iterator     = Iterator;
+  using reference    = typename iterator_traits<iterator>::reference;
+  using element_type = typename iterator_traits<iterator>::element_type;
+  using value_type   = typename iterator_traits<iterator>::value_type;
   iterator storage_;
 
-  CUTE_HOST_DEVICE constexpr
-  iterator const&
-  begin() const {
-    return storage_;
-  }
-
-  CUTE_HOST_DEVICE constexpr
-  iterator&
-  begin() {
-    return storage_;
-  }
+  CUTE_HOST_DEVICE constexpr iterator const& begin() const { return storage_; }
+  CUTE_HOST_DEVICE constexpr iterator      & begin()       { return storage_; }
 };
 
-template <class Iter>
-struct is_rmem<ViewEngine<Iter>> : is_rmem<Iter> {};
-template <class Iter>
-struct is_smem<ViewEngine<Iter>> : is_smem<Iter> {};
-template <class Iter>
-struct is_gmem<ViewEngine<Iter>> : is_gmem<Iter> {};
 template <class Iterator>
 struct ConstViewEngine
 {
-  using value_type = typename cute::remove_cvref<decltype(*declval<Iterator>())>::type;
-
-  using iterator = Iterator;
+  using iterator     = Iterator;
+  using reference    = typename iterator_traits<iterator>::reference;
+  using element_type = typename iterator_traits<iterator>::element_type;
+  using value_type   = typename iterator_traits<iterator>::value_type;
   iterator storage_;
 
-  CUTE_HOST_DEVICE constexpr
-  iterator const&
-  begin() const {
-    return storage_;
-  }
+  CUTE_HOST_DEVICE constexpr iterator const& begin() const { return storage_; }
 };
 
-template <class Iter>
-struct is_rmem<ConstViewEngine<Iter>> : is_rmem<Iter> {};
-template <class Iter>
-struct is_smem<ConstViewEngine<Iter>> : is_smem<Iter> {};
-template <class Iter>
-struct is_gmem<ConstViewEngine<Iter>> : is_gmem<Iter> {};
 //
 // Tensor
 //
@@ -116,14 +106,13 @@ struct is_gmem<ConstViewEngine<Iter>> : is_gmem<Iter> {};
 template <class Engine, class Layout>
 struct Tensor
 {
-  using value_type      = typename Engine::value_type;
-  //using pointer         = typename engine_traits<Engine>::pointer;
-  //using const_pointer   = typename engine_traits<Engine>::const_pointer;
-  //using reference       = typename engine_traits<Engine>::reference;
-  //using const_reference = typename engine_traits<Engine>::const_reference;
+  using iterator     = typename Engine::iterator;
+  using value_type   = typename Engine::value_type;
+  using element_type = typename Engine::element_type;
+  using reference    = typename Engine::reference;
 
-  using engine_type         = Engine;
-  using layout_type         = Layout;
+  using engine_type  = Engine;
+  using layout_type  = Layout;
 
   CUTE_HOST_DEVICE constexpr
   Tensor() {}
@@ -323,18 +312,13 @@ struct Tensor
   cute::tuple<layout_type, engine_type> rep_;
 };
 
-
-template <class Layout>
+template <class T>
 struct is_tensor : false_type {};
 template <class Engine, class Layout>
 struct is_tensor<Tensor<Engine,Layout>> : true_type {};
+template <class T>
+constexpr bool is_tensor_v = is_tensor<T>::value;
 
-template <class Engine, class Layout>
-struct is_rmem<Tensor<Engine,Layout>> : is_rmem<Engine> {};
-template <class Engine, class Layout>
-struct is_smem<Tensor<Engine,Layout>> : is_smem<Engine> {};
-template <class Engine, class Layout>
-struct is_gmem<Tensor<Engine,Layout>> : is_gmem<Engine> {};
 // Customization point for creation of owning and non-owning Tensors
 template <class T>
 struct MakeTensor
@@ -471,8 +455,7 @@ CUTE_HOST_DEVICE constexpr
 auto
 make_counting_tensor(Layout const& layout)
 {
-  return make_tensor(ArithmeticTupleIterator(as_arithmetic_tuple(repeat_like(coshape(layout), Int<0>{}))),
-                     layout);
+  return make_tensor(make_inttuple_iter(repeat_like(coshape(layout), Int<0>{})), layout);
 }
 
 //
@@ -499,7 +482,7 @@ CUTE_HOST_DEVICE constexpr
 decltype(auto)
 tensor(Tensor&& tensor)
 {
-  return std::forward<Tensor>(tensor);
+  return static_cast<Tensor&&>(tensor);
 }
 
 template <int I, int... Is, class Tensor,
@@ -508,17 +491,7 @@ CUTE_HOST_DEVICE constexpr
 decltype(auto)
 tensor(Tensor&& tensor)
 {
-  return make_tensor(std::forward<Tensor>(tensor).data(), get<I,Is...>(tensor.layout()));
-}
-
-// Return the subtensor of a range of modes
-template <int B, int E, class Tensor,
-          __CUTE_REQUIRES(is_tensor<remove_cvref_t<Tensor>>::value)>
-CUTE_HOST_DEVICE constexpr
-decltype(auto)
-take(Tensor&& tensor)
-{
-  return make_tensor(std::forward<Tensor>(tensor).data(), take<B,E>(tensor.layout()));
+  return make_tensor(static_cast<Tensor&&>(tensor).data(), get<I,Is...>(tensor.layout()));
 }
 
 // Return the layout of a mode
@@ -585,7 +558,7 @@ CUTE_HOST_DEVICE constexpr
 auto
 flatten(Tensor&& tensor)
 {
-  return make_tensor(std::forward<Tensor>(tensor).data(), flatten(tensor.layout()));
+  return make_tensor(static_cast<Tensor&&>(tensor).data(), flatten(tensor.layout()));
 }
 
 template <class Tensor,
@@ -594,7 +567,7 @@ CUTE_HOST_DEVICE constexpr
 auto
 coalesce(Tensor&& tensor)
 {
-  return make_tensor(std::forward<Tensor>(tensor).data(), coalesce(tensor.layout()));
+  return make_tensor(static_cast<Tensor&&>(tensor).data(), coalesce(tensor.layout()));
 }
 
 template <class Tensor, class Profile,
@@ -603,7 +576,7 @@ CUTE_HOST_DEVICE constexpr
 auto
 coalesce(Tensor&& tensor, Profile const& profile)
 {
-  return make_tensor(std::forward<Tensor>(tensor).data(), coalesce(tensor.layout(), profile));
+  return make_tensor(static_cast<Tensor&&>(tensor).data(), coalesce(tensor.layout(), profile));
 }
 
 template <class Tensor,
@@ -612,7 +585,7 @@ CUTE_HOST_DEVICE constexpr
 auto
 filter_zeros(Tensor&& tensor)
 {
-  return make_tensor(cute::forward<Tensor>(tensor).data(), filter_zeros(tensor.layout()));
+  return make_tensor(static_cast<Tensor&&>(tensor).data(), filter_zeros(tensor.layout()));
 }
 
 template <class Tensor,
@@ -621,7 +594,7 @@ CUTE_HOST_DEVICE constexpr
 auto
 filter(Tensor&& tensor)
 {
-  return make_tensor(std::forward<Tensor>(tensor).data(), filter(tensor.layout()));
+  return make_tensor(static_cast<Tensor&&>(tensor).data(), filter(tensor.layout()));
 }
 
 template <class Tensor, class Profile,
@@ -630,7 +603,7 @@ CUTE_HOST_DEVICE constexpr
 auto
 filter(Tensor&& tensor, Profile const& profile)
 {
-  return make_tensor(std::forward<Tensor>(tensor).data(), filter(tensor.layout(), profile));
+  return make_tensor(static_cast<Tensor&&>(tensor).data(), filter(tensor.layout(), profile));
 }
 
 // Return a tensor with the same shape as input but offset by a given coordinate
@@ -641,7 +614,7 @@ auto
 domain_offset(Coord const& coord, Tensor&& tensor)
 {
   auto [layout, ptr_offset] = domain_offset(coord, tensor.layout());
-  return make_tensor(std::forward<Tensor>(tensor).data() + ptr_offset, layout);
+  return make_tensor(static_cast<Tensor&&>(tensor).data() + ptr_offset, layout);
 }
 
 // Group the modes [B,E) into a single mode
@@ -653,8 +626,18 @@ CUTE_HOST_DEVICE constexpr
 auto
 group_modes(Tensor&& tensor)
 {
-  return make_tensor(std::forward<Tensor>(tensor).data(),
+  return make_tensor(static_cast<Tensor&&>(tensor).data(),
                      group<B,E>(tensor.layout()));
+}
+
+// Return the subtensor of a range of modes
+template <int B, int E, class Tensor,
+          __CUTE_REQUIRES(is_tensor<remove_cvref_t<Tensor>>::value)>
+CUTE_HOST_DEVICE constexpr
+decltype(auto)
+take(Tensor&& tensor)
+{
+  return make_tensor(static_cast<Tensor&&>(tensor).data(), take<B,E>(tensor.layout()));
 }
 
 //
@@ -665,16 +648,14 @@ group_modes(Tensor&& tensor)
 //   -- doesn't check dynamic integer divisibility
 //   -- doesn't check alignment
 
-// A tagged version for dispatching
-template <class NewType, class Tensor,
-          __CUTE_REQUIRES(is_tensor<remove_cvref_t<Tensor>>::value)>
+template <class NewType, class Tensor>
 CUTE_HOST_DEVICE constexpr
 auto
-recast(Tensor&& tensor, type_list<NewType>)
+recast(Tensor&& tensor)
 {
   using OldType = typename remove_cvref_t<Tensor>::value_type;
   auto old_layout = tensor.layout();
-  auto new_layout = recast<OldType,NewType>(old_layout);
+  auto new_layout = recast_layout<OldType,NewType>(old_layout);
 
   // If this is an upcast of a normal Layout with static negative strides, then offset as well
   if constexpr (sizeof(OldType) < sizeof(NewType) && not is_composed_layout<decltype(old_layout)>::value) {
@@ -682,43 +663,19 @@ recast(Tensor&& tensor, type_list<NewType>)
     auto extent_diff = transform(shape_diff, flatten(old_layout.stride()), multiplies{});
     auto offset = fold(extent_diff, Int<0>{}, [](auto const& i, auto const& a) { return i + cute::min(a,Int<0>{}); });
 
-    return make_tensor(recast<NewType>(std::forward<Tensor>(tensor).data() + offset), new_layout);
+    return make_tensor(recast_ptr<NewType>(static_cast<Tensor&&>(tensor).data() + offset), new_layout);
   } else {
-    return make_tensor(recast<NewType>(std::forward<Tensor>(tensor).data()         ), new_layout);
+    return make_tensor(recast_ptr<NewType>(static_cast<Tensor&&>(tensor).data()         ), new_layout);
   }
 
   CUTE_GCC_UNREACHABLE;
-}
-
-template <class NewType, class Engine, class Layout>
-CUTE_HOST_DEVICE constexpr
-auto
-recast(Tensor<Engine,Layout> const& tensor)
-{
-  return recast(tensor, type_list<NewType>{});
-}
-
-template <class NewType, class Engine, class Layout>
-CUTE_HOST_DEVICE constexpr
-auto
-recast(Tensor<Engine,Layout>& tensor)
-{
-  return recast(tensor, type_list<NewType>{});
-}
-
-template <class NewType, class Engine, class Layout>
-CUTE_HOST_DEVICE constexpr
-auto
-recast(Tensor<Engine,Layout>&& tensor)
-{
-  return recast(std::forward<Tensor<Engine,Layout>>(tensor), type_list<NewType>{});
 }
 
 //
 // max_common_vector
 //
 
-/* Return Int<N> such that N is the maximum number of continguous elements
+/* Return Int<N> such that N is the maximum number of contiguous elements
  * that logically correspond in the tensors of @a a and @a b. This is,
  * the number of elements that could reasonably be vectorized into a single load/store.
  *
@@ -726,6 +683,9 @@ recast(Tensor<Engine,Layout>&& tensor)
  *
  * A return value of Int<0> indicates that no such conclusion can be made and no
  * vectorization should be attempted.
+ *
+ * Note that the return value does NOT include alignment concerns such as the pointer value and
+ * the divisbility of dynamic strides.
  */
 template <class SrcEngine, class SrcLayout,
           class DstEngine, class DstLayout>
@@ -736,13 +696,12 @@ max_common_vector(Tensor<SrcEngine,SrcLayout> const& a,
 {
   using SrcType = typename Tensor<SrcEngine,SrcLayout>::value_type;
   using DstType = typename Tensor<DstEngine,DstLayout>::value_type;
-
-  using SrcRef = decltype(*(a.data()));
-  using DstRef = decltype(*(b.data()));
+  using SrcRef  = typename Tensor<SrcEngine,SrcLayout>::reference;
+  using DstRef  = typename Tensor<SrcEngine,SrcLayout>::reference;
 
   // Determine if vectorization candidates at all
   if constexpr (// Should be the same value_types, else the copy is also performing a cast
-                sizeof(SrcType) == sizeof(DstType) &&
+                sizeof_bits_v<SrcType> == sizeof_bits_v<DstType> &&
                 // The types should be trivially copyable so that vectorization is valid
                 is_trivially_copyable<SrcType>::value &&
                 is_trivially_copyable<DstType>::value &&
@@ -758,145 +717,263 @@ max_common_vector(Tensor<SrcEngine,SrcLayout> const& a,
   CUTE_GCC_UNREACHABLE;
 }
 
+/* Return a layout that points to the maximum number of contiguous elements
+ * that logically correspond in the tensors of @a a and @a b. This is,
+ * the elements that could reasonably be "vectorized" into a single load/store.
+ *
+ * @returns Layout R such that composition(a.layout(), R) and composition(b.layout(), R)
+ *          are both identity Layouts.
+ *
+ * Note that the returned layout does NOT include alignment concerns such as the pointer value and
+ * the divisbility of dynamic strides.
+ */
+template <class SrcEngine, class SrcLayout,
+          class DstEngine, class DstLayout>
+CUTE_HOST_DEVICE constexpr
+auto
+max_common_layout(Tensor<SrcEngine,SrcLayout> const& a,
+                  Tensor<DstEngine,DstLayout> const& b)
+{
+  using SrcType = typename Tensor<SrcEngine,SrcLayout>::value_type;
+  using DstType = typename Tensor<DstEngine,DstLayout>::value_type;
+  using SrcRef  = typename Tensor<SrcEngine,SrcLayout>::reference;
+  using DstRef  = typename Tensor<SrcEngine,SrcLayout>::reference;
+
+  // Determine if vectorization candidates at all
+  if constexpr (// Should be the same value_types, else the copy is also performing a cast
+                sizeof_bits_v<SrcType> == sizeof_bits_v<DstType> &&
+                // The types should be trivially copyable so that vectorization is valid
+                is_trivially_copyable<SrcType>::value &&
+                is_trivially_copyable<DstType>::value &&
+                // Should be load/storing real data, rather than implicit iterators or such
+                is_reference<SrcRef>::value &&
+                is_reference<DstRef>::value)
+  {
+    return max_common_layout(a.layout(), b.layout());
+  } else {
+    return Layout<_1,_0>{};
+  }
+
+  CUTE_GCC_UNREACHABLE;
+}
+
 //
-// Key algebraic operations
+// Key algebraic operations -- Divide and Product
 //
 
-template <class Tensor, class Tile,
+// Apply a Tiler to the Tensor.
+//
+// Consider a Tensor with shape (A,B,x,y)
+// And a Tiler that is:
+//
+// * A Layout with shape (BLK_A,BLK_B)
+// ** Result Tensor shape ((BLK_A,BLK_B),Rest).
+// ** That is, the Tensor and Tile are treated as 1D for the tiling.
+// ** See logical_divide(Layout,Layout)
+//
+// * A Tile<Layout...> with shape <BLK_A,BLK_B>
+// ** Result Tensor shape ((BLK_A,a),(BLK_B,b),x,y).
+// ** Each mode of the Tile<Layout...> is applied to the corresponding mode of the Tensor.
+// ** See logical_divide(Layout,Tuple)
+//
+// * A Shape (BLK_A,BLK_B)
+// ** Result Tensor shape ((BLK_A,a),(BLK_B,b),x,y).
+// ** Equivalent to applying Tile<BLK_A:_1,BLK_B:_1>.
+// ** See logical_divide(Layout,Tuple) and logical_divide(Layout,Int)
+//
+// Note that the Tile<Layout...>/Shape Tilers must be weakly_congruent to the Tensor
+template <class Tensor, class Tiler,
           __CUTE_REQUIRES(is_tensor<remove_cvref_t<Tensor>>::value)>
 CUTE_HOST_DEVICE constexpr
 auto
 logical_divide(Tensor    && tensor,
-               Tile  const& tile)
+               Tiler const& tiler)   // Layout or Tile<Layout...> or Shape
 {
-  return make_tensor(std::forward<Tensor>(tensor).data(),
-                     logical_divide(tensor.layout(), tile));
+  return make_tensor(static_cast<Tensor&&>(tensor).data(),
+                     logical_divide(tensor.layout(), tiler));
 }
 
-// zipped_divide is logical_divide with modes gathered into standard form ((BLK_A,BLK_B),(a,b))
-template <class Tensor, class Tile,
+// zipped_divide is logical_divide with Tiler modes and Rest modes gathered together: (Tiler,Rest)
+// When Tiler is Layout, this has no effect as logical_divide results in the same.
+// When Tiler is Tile<Layout...> or Shape, this zips modes into standard form ((BLK_A,BLK_B),(a,b,x,y))
+template <class Tensor, class Tiler,
           __CUTE_REQUIRES(is_tensor<remove_cvref_t<Tensor>>::value)>
 CUTE_HOST_DEVICE constexpr
 auto
-zipped_divide(Tensor     && tensor,
-              Tile   const& tile)   // Layout or Tile<Layout...>
+zipped_divide(Tensor    && tensor,
+              Tiler const& tiler)    // Layout or Tile<Layout...> or Shape
 {
-  return make_tensor(std::forward<Tensor>(tensor).data(),
-                     zipped_divide(tensor.layout(), tile));
+  return make_tensor(static_cast<Tensor&&>(tensor).data(),
+                     zipped_divide(tensor.layout(), tiler));
 }
 
-// tiled_divide is logical_divide with the second output mode flattened ((BLK_A,BLK_B),a,b)
-template <class Tensor, class Tile,
+// tiled_divide is zipped_divide with the second output mode flattened ((BLK_A,BLK_B),a,b,x,y)
+template <class Tensor, class Tiler,
           __CUTE_REQUIRES(is_tensor<remove_cvref_t<Tensor>>::value)>
 CUTE_HOST_DEVICE constexpr
 auto
-tiled_divide(Tensor     && tensor,
-             Tile   const& tile)   // Layout or Tile<Layout...>
+tiled_divide(Tensor    && tensor,
+             Tiler const& tiler)     // Layout or Tile<Layout...> or Shape
 {
-  return make_tensor(std::forward<Tensor>(tensor).data(),
-                     tiled_divide(tensor.layout(), tile));
+  return make_tensor(static_cast<Tensor&&>(tensor).data(),
+                     tiled_divide(tensor.layout(), tiler));
+}
+
+// flat_divide is zipped_divide with the both modes flattened (BLK_A,BLK_B,a,b,x,y)
+template <class Tensor, class Tiler,
+          __CUTE_REQUIRES(is_tensor<remove_cvref_t<Tensor>>::value)>
+CUTE_HOST_DEVICE constexpr
+auto
+flat_divide(Tensor    && tensor,
+            Tiler const& tiler)      // Layout or Tile<Layout...> or Shape
+{
+  return make_tensor(static_cast<Tensor&&>(tensor).data(),
+                     flat_divide(tensor.layout(), tiler));
 }
 
 // logical_product on a Tensor doesn't make sense since it often increases cosize
+//   though this might make sense for creating Tensors with broadcasted (stride-0) modes
 
 //
-// Logical Divide utilities: local_partition and local_tile
+// Tensor partitioning utilities
 //
 
-template <class Tensor, class Tile, class Coord,
+// Apply a Tiler to the Tensor, then slice out one of those tiles by slicing into the "Rest" modes.
+// With an inner_partition, you get everything that's inside the Tiler. Everything that the Tiler is pointing to.
+// Split the modes of tensor according to the Tiler
+//   zipped_divide returns something like ((BLK_A,BLK_B,...),(a,b,...,x,y))
+// Then slice into the second mode (the "Rest" mode) with Coord
+template <class Tensor, class Tiler, class Coord,
           __CUTE_REQUIRES(is_tensor<remove_cvref_t<Tensor>>::value)>
 CUTE_HOST_DEVICE constexpr
 auto
-local_partition(Tensor     && tensor,
-                Tile   const& tile,
-                Coord  const& coord)
+inner_partition(Tensor    && tensor,
+                Tiler const& tiler,
+                Coord const& coord)
 {
-  constexpr int R1 = decltype(rank(tensor))::value;
+  auto tensor_tiled = zipped_divide(static_cast<Tensor&&>(tensor), tiler);
+  constexpr int R0 = decltype(rank<0>(tensor_tiled))::value;
 
-  // Split the modes of tensor according to the modes of tile
-  // zipped_divide returns something like ((VEC_A,VEC_B,...),(a,b,...))
-
-  // The_coord is the coord into the first mode, flatten the rest
-  return zipped_divide(std::forward<Tensor>(tensor), tile)(coord, repeat<R1>(_));
+  // The coord slices into the second mode (the "rest" mode), flatten the first
+  if constexpr (is_tuple<Coord>::value) {
+    // Append trailing modes if coord is tuple
+    constexpr int R1 = decltype(rank<1>(tensor_tiled))::value;;
+    return tensor_tiled(repeat<R0>(_), append<R1>(coord,_));
+  } else {
+    // Flat indexing if coord is not tuple
+    return tensor_tiled(repeat<R0>(_), coord);
+  }
 }
 
-template <class Tensor, class Tile, class Coord, class Projection,
+// Apply a Tiler to the Tensor, then slice out the remainder by slicing into the "Tile" modes.
+// With an outer_partition, you get everything that's outside the Tiler. The layout of the Tile in the Tensor.
+// Split the modes of tensor according to the Tiler
+//   zipped_divide returns something like ((BLK_A,BLK_B,...),(a,b,...,x,y))
+// Then slice into the first mode (the "Tile" mode) with Coord
+template <class Tensor, class Tiler, class Coord,
           __CUTE_REQUIRES(is_tensor<remove_cvref_t<Tensor>>::value)>
 CUTE_HOST_DEVICE constexpr
 auto
-local_partition(Tensor         && tensor,
-                Tile       const& tile,
-                Coord      const& coord,
-                Projection const& proj)
+outer_partition(Tensor    && tensor,
+                Tiler const& tiler,
+                Coord const& coord)
 {
-  return local_partition(std::forward<Tensor>(tensor),
-                         dice(proj, tile),
-                         dice(proj, coord));
+  auto tensor_tiled = zipped_divide(static_cast<Tensor&&>(tensor), tiler);
+  constexpr int R1 = decltype(rank<1>(tensor_tiled))::value;
+
+  // The coord slices into the first mode (the "tile" mode), flatten the second
+  if constexpr (is_tuple<Coord>::value) {
+    // Append trailing modes if coord is tuple
+    constexpr int R0 = decltype(rank<0>(tensor_tiled))::value;
+    return tensor_tiled(append<R0>(coord,_), repeat<R1>(_));
+  } else {
+    // Flat indexing if coord is not tuple
+    return tensor_tiled(coord, repeat<R1>(_));
+  }
 }
 
-// Special case with Layout and Integral that extracts the coord first
-// e.g. local_partition(tensor, ThrLayout, threadIdx.x)
-template <class Tensor, class LShape, class LStride, class Index,
-          __CUTE_REQUIRES(is_tensor<remove_cvref_t<Tensor>>::value &&
-                          is_integral<Index>::value)>
+// Tile a tensor according to @a tiler and use @a coord to index into the remainder, keeping the tile.
+// This is typical at the CTA level where tiles of data are extracted:
+//   Tensor data = ...                                                                         // (  M,  N)
+//   Tensor cta_data = local_tile(data, Shape<_32,_64>{}, make_coord(blockIdx.x,blockIdx.y));  // (_32,_64)
+template <class Tensor, class Tiler, class Coord,
+          __CUTE_REQUIRES(is_tensor<remove_cvref_t<Tensor>>::value)>
+CUTE_HOST_DEVICE constexpr
+auto
+local_tile(Tensor    && tensor,
+           Tiler const& tiler,   // tiler to apply
+           Coord const& coord)   // coord to slice into "remainder"
+{
+  return inner_partition(static_cast<Tensor&&>(tensor),
+                         tiler,
+                         coord);
+}
+
+// Same as above, but with a projection parameter to strip out unwanted tiling modes for convenience
+//   when using projections of the same tiler.
+// This is typical at the CTA level where tiles of data are extracted as projections:
+//   Tensor dataA = ...                                                        // (M,K)
+//   Tensor dataB = ...                                                        // (N,K)
+//   Tensor dataC = ...                                                        // (M,N)
+//   auto cta_tiler = Shape<_32, _64, _4>{};
+//   auto cta_coord = make_coord(blockIdx.x, blockIdx.y, _);
+//   Tensor ctaA = local_tile(dataA, cta_tiler, cta_coord, Step<_1, X,_1>{});  // (_32,_4,k)
+//   Tensor ctaB = local_tile(dataA, cta_tiler, cta_coord, Step< X,_1,_1>{});  // (_64,_4,k)
+//   Tensor ctaC = local_tile(dataA, cta_tiler, cta_coord, Step<_1,_1, X>{});  // (_32,_64)
+template <class Tensor, class Tiler, class Coord, class Proj,
+          __CUTE_REQUIRES(is_tensor<remove_cvref_t<Tensor>>::value)>
 CUTE_HOST_DEVICE
 auto
-local_partition(Tensor                      && tensor,
-                Layout<LShape,LStride>  const& tile,
-                Index                   const& index)
+local_tile(Tensor    && tensor,
+           Tiler const& tiler,   // tiler to apply
+           Coord const& coord,   // coord to slice into "remainder"
+           Proj  const& proj)    // projection to apply to tiler and coord
 {
-  return local_partition(std::forward<Tensor>(tensor),
+  return local_tile(static_cast<Tensor&&>(tensor),
+                    dice(proj, tiler),
+                    dice(proj, coord));
+}
+
+// Tile a tensor according to the flat shape of a layout that provides the coordinate of the target index.
+// This is typical at the Thread level where data is partitioned across repeated patterns of threads:
+//   Tensor data = ...                                                            // (_16,_64)
+//   Tensor thr_data = local_partition(data, Layout<Shape<_2,_16>>{}, thr_idx);   // ( _8, _4)
+template <class Tensor, class LShape, class LStride, class Index,
+          __CUTE_REQUIRES(is_tensor<remove_cvref_t<Tensor>>::value)>
+CUTE_HOST_DEVICE
+auto
+local_partition(Tensor                     && tensor,
+                Layout<LShape,LStride> const& tile,    // coord -> index
+                Index                  const& index)   // index to slice for
+{
+  static_assert(is_integral<Index>::value);
+  return outer_partition(static_cast<Tensor&&>(tensor),
                          product_each(shape(tile)),
                          tile.get_flat_coord(index));
 }
 
-// Special case with Layout and Integral that extracts the coord first
-// e.g. local_partition(tensor, ThrLayout, threadIdx.x, Step<_1,X,_1>{})
+// Same as above, but with a projection parameter to strip out unwanted tiling modes for convenience
+//   when using projections of the same tiler.
+// This is typical at the Thread level where data is partitioned across projected layouts of threads:
+//   Tensor dataA = ...                                                            // (M,K)
+//   Tensor dataB = ...                                                            // (N,K)
+//   Tensor dataC = ...                                                            // (M,N)
+//   auto thr_layout = Layout<Shape<_2,_16,_1>, Stride<_16,_1,_0>>{};
+//   Tensor thrA = local_partition(dataA, thr_layout, thr_idx, Step<_1, X,_1>{});  // (M/2,K/1)
+//   Tensor thrB = local_partition(dataB, thr_layout, thr_idx, Step< X,_1,_1>{});  // (N/16,K/1)
+//   Tensor thrC = local_partition(dataC, thr_layout, thr_idx, Step<_1,_1, X>{});  // (M/2,N/16)
 template <class Tensor, class LShape, class LStride, class Index, class Projection,
-          __CUTE_REQUIRES(is_tensor<remove_cvref_t<Tensor>>::value &&
-                          is_integral<Index>::value)>
-CUTE_HOST_DEVICE
-auto
-local_partition(Tensor                      && tensor,
-                Layout<LShape,LStride>  const& tile,
-                Index                   const& index,
-                Projection              const& proj)
-{
-  return local_partition(std::forward<Tensor>(tensor),
-                         dice(proj, product_each(shape(tile))),
-                         dice(proj, tile).get_flat_coord(index));
-}
-
-template <class Tensor, class Tile, class Coord,
-          __CUTE_REQUIRES(is_tensor<remove_cvref_t<Tensor>>::value)>
-CUTE_HOST_DEVICE constexpr
-auto
-local_tile(Tensor     && tensor,
-           Tile   const& tile,
-           Coord  const& coord)
-{
-  constexpr int R0 = decltype(rank(tile))::value;
-  constexpr int R1 = decltype(rank(tensor))::value;
-
-  // Split the modes of tensor according to the modes of tile
-  // zipped_divide returns something like ((VEC_A,VEC_B,...),(a,b,...))
-
-  // The padded_coord is the coord into the second mode, flatten the rest
-  return zipped_divide(std::forward<Tensor>(tensor), tile)(repeat<R0>(_), append<R1>(coord,_));
-}
-
-template <class Tensor, class Tile, class Coord, class Proj,
           __CUTE_REQUIRES(is_tensor<remove_cvref_t<Tensor>>::value)>
 CUTE_HOST_DEVICE
 auto
-local_tile(Tensor     && tensor,
-           Tile   const& tile,
-           Coord  const& coord,
-           Proj   const& proj)
+local_partition(Tensor                     && tensor,
+                Layout<LShape,LStride> const& tile,   // coord -> index
+                Index                  const& index,  // index to slice for
+                Projection             const& proj)
 {
-  return local_tile(std::forward<Tensor>(tensor),
-                    dice(proj, tile),
-                    dice(proj, coord));
+  return local_partition(static_cast<Tensor&&>(tensor),
+                         dice(proj, tile),
+                         index);
 }
 
 //
@@ -906,21 +983,20 @@ local_tile(Tensor     && tensor,
 template <class Engine, class Layout>
 CUTE_HOST_DEVICE void print(Tensor<Engine,Layout> const& tensor)
 {
-  print(tensor.data()); print(" o "); print(tensor.layout()); 
+  print(tensor.data()); print(" o "); print(tensor.layout());
 }
 
 template <class Engine, class Layout>
-CUTE_HOST_DEVICE void print_tensor(Tensor<Engine,Layout> const& tensor)
+CUTE_HOST_DEVICE void print_tensor(Tensor<Engine,Layout> const& tensor, bool print_type = true)
 {
-  print(tensor); print(":\n");
-
-  auto format = get_format(tensor(0));
-  using type = typename decltype(format)::type;
+  if (print_type) {
+    print(tensor); print(":\n");
+  }
 
   if constexpr (Layout::rank == 1)
   {
     for (int m = 0; m < size(tensor); ++m) {
-      printf(format.format, format.digits, type(tensor(m)));
+      pretty_print(tensor(m));
       printf("\n");
     }
   } else
@@ -928,30 +1004,28 @@ CUTE_HOST_DEVICE void print_tensor(Tensor<Engine,Layout> const& tensor)
   {
     for (int m = 0; m < size<0>(tensor); ++m) {
       for (int n = 0; n < size<1>(tensor); ++n) {
-        printf(format.format, format.digits, type(tensor(m,n)));
+        pretty_print(tensor(m,n));
       }
       printf("\n");
     }
   } else
   if constexpr (Layout::rank == 3)
   {
-    print_tensor(tensor(_,_,0));
+    print_tensor(tensor(_,_,0), false);
     for (int k = 1; k < size<2>(tensor); ++k) {
-      for (int i = 0; i < format.digits*size<1>(tensor); ++i) { print("-"); } print("\n");
-      print_tensor(tensor(_,_,k));
+      for (int i = 0; i < 5*size<1>(tensor); ++i) { print("-"); } print("\n");
+      print_tensor(tensor(_,_,k), false);
     }
   } else
   if constexpr (Layout::rank == 4)
   {
-    print_tensor(tensor(_,_,_,0));
+    print_tensor(tensor(_,_,_,0), false);
     for (int p = 1; p < size<3>(tensor); ++p) {
-      for (int i = 0; i < format.digits*size<1>(tensor); ++i) { print("="); } print("\n");
-      print_tensor(tensor(_,_,_,p));
+      for (int i = 0; i < 5*size<1>(tensor); ++i) { print("="); } print("\n");
+      print_tensor(tensor(_,_,_,p), false);
     }
   }
 }
-
-
 
 #if !defined(__CUDACC_RTC__)
 template <class Engine, class Layout>
@@ -1008,7 +1082,8 @@ CUTE_HOST std::ostream& operator<<(std::ostream& os, Tensor<Engine,Layout> const
 // Extended Engines
 //
 
-#include <cute/swizzle_ptr.hpp>
+#include <cute/pointer_swizzle.hpp>
+#include <cute/pointer_flagged.hpp>
 //
 // Tensor Algorithms
 //
@@ -1017,5 +1092,9 @@ CUTE_HOST std::ostream& operator<<(std::ostream& os, Tensor<Engine,Layout> const
 #include <cute/algorithm/fill.hpp>
 #include <cute/algorithm/clear.hpp>
 #include <cute/algorithm/copy.hpp>
+#include <cute/algorithm/prefetch.hpp>
 #include <cute/algorithm/axpby.hpp>
 #include <cute/algorithm/gemm.hpp>
+
+#include <cute/algorithm/cooperative_copy.hpp>
+#include <cute/algorithm/cooperative_gemm.hpp>

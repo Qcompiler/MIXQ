@@ -1,6 +1,6 @@
 ################################################################################
 #
-# Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -46,8 +46,8 @@ from utils.evt_testbed import EVTTestBed, EVTTestCaseBase
 cutlass.set_log_level(logging.WARNING)
 
 
-@unittest.skipIf(device_cc() not in [80, 90], "This unittest is for Sm80 and Sm90 only")
-class TestEVTStoreSM90(EVTTestCaseBase):
+@unittest.skipIf(device_cc() not in [80, 86, 89, 90], "This unittest is only supported on CC [80, 86, 89, 90]")
+class TestEVTStore(EVTTestCaseBase):
 
     def test_aux_store(self):
         """

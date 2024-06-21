@@ -1,5 +1,5 @@
   /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,21 +33,12 @@
 
     This is inspired by the Standard Library's <functional> header.
 */
-/*
-  Note:  CUTLASS 3x increases the host compiler requirements to C++17. However, certain
-         existing integrations of CUTLASS require C++11 host compilers.
-
-         Until this requirement can be lifted, certain headers with this annotation are required
-         to be remain consistent with C++11 syntax.
-
-         C++11 compatibility is enforced by `cutlass_test_unit_core_cpp11`.
-*/
 #pragma once
 
 #include "cutlass/cutlass.h"
-#include "cutlass/half.h"
-#include "cutlass/tfloat32.h"
-#include "cutlass/bfloat16.h"
+#include "cutlass/numeric_types.h"
+
+#include <cuda_runtime.h>
 
 #if defined(CUTLASS_ARCH_WMMA_ENABLED)
 #include <mma.h>
@@ -106,7 +97,7 @@ struct multiplies {
 template <typename T>
 struct scale {
   T const scaling_factor_;
-  
+
   CUTLASS_HOST_DEVICE
   scale(float scaling_factor) : scaling_factor_(scaling_factor) {
   }
@@ -218,6 +209,35 @@ struct magnitude_squared_difference {
   }
 };
 
+// Computes the reciprocal square root
+template <typename T>
+struct inverse_square_root;
+
+template <>
+struct inverse_square_root<float> {
+  CUTLASS_HOST_DEVICE
+  float operator()(float const &lhs) const {
+#if defined(__CUDA_ARCH__)
+    return rsqrtf(lhs);
+#else
+    return 1.f / std::sqrt(lhs);
+#endif
+  }
+};
+
+template <>
+struct inverse_square_root<half_t> {
+  CUTLASS_HOST_DEVICE
+  half_t operator()(half_t const &lhs) const {
+#if defined(__CUDA_ARCH__)
+    auto result = hrsqrt(reinterpret_cast<__half const &>(lhs));
+    return reinterpret_cast<half_t const &>(result);
+#else
+    return half_t(1.f / std::sqrt(half_t::convert(lhs)));
+#endif
+  }
+};
+
 /// Divides
 template <typename T>
 struct divides {
@@ -225,6 +245,25 @@ struct divides {
   T operator()(T lhs, T const &rhs) const {
     lhs /= rhs;
     return lhs;
+  }
+};
+
+/// reciprocal_approximate
+template <typename T>
+struct reciprocal_approximate {
+  CUTLASS_HOST_DEVICE
+  T operator()(T lhs) const {
+    return divides<T>{}(T(1), lhs);
+  }
+};
+
+template <>
+struct reciprocal_approximate <float> {
+  CUTLASS_HOST_DEVICE
+  float operator()(float lhs) const {
+    float ret;
+      ret = 1.0f / lhs;
+    return ret;
   }
 };
 
@@ -237,7 +276,7 @@ struct negate {
   }
 };
 
-/// Greater equal 
+/// Greater equal
 template <typename T>
 struct greater_equal {
   CUTLASS_HOST_DEVICE
@@ -246,7 +285,7 @@ struct greater_equal {
   }
 };
 
-/// Greater  
+/// Greater
 template <typename T>
 struct greater {
   CUTLASS_HOST_DEVICE
@@ -255,7 +294,7 @@ struct greater {
   }
 };
 
-/// Less equal 
+/// Less equal
 template <typename T>
 struct less_equal {
   CUTLASS_HOST_DEVICE
@@ -264,7 +303,7 @@ struct less_equal {
   }
 };
 
-/// Less  
+/// Less
 template <typename T>
 struct less {
   CUTLASS_HOST_DEVICE
@@ -273,7 +312,7 @@ struct less {
   }
 };
 
-template <typename T, bool PropogateNaN = false>
+template <typename T, bool PropagateNaN = false>
 struct maximum {
   CUTLASS_HOST_DEVICE
   T operator()(T const &lhs, T const &rhs) const {
@@ -281,8 +320,17 @@ struct maximum {
   }
 };
 
-// Maximum with nan propogation
-// To propgate the NANs, the "max" of a two element that contains NaNs should also return a NaN 
+// This is a subclass and not an alias
+// in order to work around a known Clang issue,
+// where a template template parameter with one template parameter
+// does not match classes that take multiple template parameters
+// but have defaults for all but the first.
+template<typename T>
+struct maximum_with_default_nan_propagation : public maximum<T>
+{};
+
+// Maximum with nan propagation
+// To propagate NANs, the "max" of a two element that contains NaNs should also return a NaN
 template <typename T>
 struct maximum<T, true> {
   CUTLASS_HOST_DEVICE
@@ -319,10 +367,21 @@ struct maximum<float, true> {
   }
 };
 
+// This is a subclass and not an alias
+// in order to work around a known Clang issue,
+// where a template template parameter with one template parameter
+// does not match classes that take multiple template parameters
+// but have defaults for all but the first.
 template <typename T>
-using maximum_with_nan_propogation = maximum<T, true>;
+struct maximum_with_nan_propagation : maximum<T, true>
+{};
 
-template <typename T, bool PropogateNaN = false>
+// This alias exists for backwards compatibility only.
+// Please use the correctly spelled class template above.
+template <typename T>
+using maximum_with_nan_propogation = maximum_with_nan_propagation<T>;
+
+template <typename T, bool PropagateNaN = false>
 struct minimum{
   CUTLASS_HOST_DEVICE
   T operator()(T const &lhs, T const &rhs) const {
@@ -350,24 +409,24 @@ struct minimum<float, false> {
   }
 };
 
-template <typename T, bool PropogateNaN = false>
+template <typename T, bool PropagateNaN = false>
 struct maximum_absolute_value {
   CUTLASS_HOST_DEVICE
   float operator()(T const &lhs, T const &rhs) const {
     absolute_value_op<T> abs_op;
-    maximum<T, PropogateNaN> max_op;
+    maximum<T, PropagateNaN> max_op;
 
     return max_op(abs_op(lhs), abs_op(rhs));
   }
 };
 
 // assumes the left operand is already an absolute value
-template <typename T, bool PropogateNaN = false>
+template <typename T, bool PropagateNaN = false>
 struct maximum_absolute_value_reduction {
   CUTLASS_HOST_DEVICE
   float operator()(T const &lhs, T const &rhs) const {
     absolute_value_op<T> abs_op;
-    maximum<T, PropogateNaN> max_op;
+    maximum<T, PropagateNaN> max_op;
 
     return max_op(lhs, abs_op(rhs));
   }
@@ -381,6 +440,24 @@ struct multiply_add {
     return C(a) * C(b) + c;
   }
 };
+
+template <typename T>
+struct square_and_plus {
+  CUTLASS_HOST_DEVICE
+  T operator()(T lhs, T const &rhs) const {
+    multiply_add<T> multiply_add_op;
+    return multiply_add_op(rhs, rhs, lhs);
+  }
+};
+
+// Fused multiply-add that takes exactly one template parameter.
+// This is useful for working around a known Clang issue,
+// where a template template parameter with one template parameter
+// does not match classes that take multiple template parameters
+// but have defaults for all but the first.
+template <typename A>
+struct homogeneous_multiply_add : public multiply_add<A, A, A>
+{};
 
 /// Fused multiply-add
 template <typename A, typename B = A, typename C = A>
@@ -425,6 +502,10 @@ struct first {
   T operator()(T const & first, T const &...) const {
     return first;
   }
+  CUTLASS_HOST_DEVICE
+  T operator()(T const & first) const {
+    return first;
+  }
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -433,7 +514,7 @@ template <typename T>
 struct logical_and {
   CUTLASS_HOST_DEVICE
   T operator()(T const &a, T const &b) const {
-    return ((a && b) ? T(1) : T());
+    return ((static_cast<bool>(a) && static_cast<bool>(b)) ? T(1) : T());
   }
 };
 
@@ -441,7 +522,7 @@ template <typename T>
 struct logical_or {
   CUTLASS_HOST_DEVICE
   T operator()(T const &a, T const &b) const {
-    return ((a || b) ? T(1) : T());
+    return ((static_cast<bool>(a) || static_cast<bool>(b)) ? T(1) : T());
   }
 };
 
@@ -486,8 +567,6 @@ struct bit_xor {
     return a ^ b;
   }
 };
-
-
 
 //////////////////////////////////////////////////////////////////////////////////////////////////
 /// Atomic reductions
@@ -581,6 +660,14 @@ struct atomic_maximum<float> {
 #endif
   }
 };
+
+// is_atomic
+template <class Fn>
+struct is_atomic : platform::false_type {};
+template <class T>
+struct is_atomic<atomic_add<T>> : platform::true_type {};
+template <class T>
+struct is_atomic<atomic_maximum<T>> : platform::true_type {};
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////

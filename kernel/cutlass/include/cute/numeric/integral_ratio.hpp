@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -40,12 +40,16 @@ namespace cute
 {
 
 /** Compile-time rational arithmetic type.
- * Like cute::C for std::integral_constant, cute::R for std::ratio has a short name 
+ * Like cute::C for std::integral_constant, cute::R for std::ratio has a short name
  *   for error messages and compile times.
  * The static data members @a num and @a den represent the reduced numerator and denominator
- *   of the rational value. Thus, two cute::R types with different @a n or @a d are distinct types 
- *   even if they represent the same rational value. A cute::R exposes the reduced canonical type
- *   via its type member. That is, cute::R<3,6>::type is cute::R<1,2> and cute::R<6,3>::type is cute::C<2>
+ *   of the rational value. Thus, two cute::R types with different @a n or @a d are distinct types
+ *   even if they represent the same rational value.
+ * A cute::R exposes the reduced canonical type via its ::type member.
+ *   That is, cute::R<3,6>::type is cute::R<1,2> and cute::R<6,3>::type is cute::C<2>.
+ * A cute::R<n,d>::value can be used much like any other trait::value. It can be involved in
+ *   arithmetic expressions (according to the operator-overloads for cute::C and cute::R,
+ *   though these may be incomplete) but with a potential rational value rather than an integral value.
  */
 template <auto n, auto d>
 class R {
@@ -53,7 +57,7 @@ class R {
   static constexpr auto an  = abs(n);
   static constexpr auto ad  = abs(d);
   static constexpr auto g   = gcd(an, ad);
-  
+
  public:
   static constexpr auto num = signum(n) * signum(d) * an / g;
   static constexpr auto den =                         ad / g;
@@ -61,31 +65,100 @@ class R {
   using type = typename conditional<num == 0 || den == 1, C<num>, R<num,den>>::type;
 };
 
+template <class T>
+struct is_ratio : false_type {};
+template <auto n, auto d>
+struct is_ratio<R<n,d>> : true_type {};
+
 template <auto a, auto b>
 CUTE_HOST_DEVICE constexpr
-typename R<a,b>::type 
+typename R<a,b>::type
 ratio(C<a>, C<b>) {
   return {};
 }
 
+template <auto a, auto b, auto c>
+CUTE_HOST_DEVICE constexpr
+typename R<a*c,b>::type
+ratio(C<a>, R<b,c>) {
+  return {};
+}
+
+template <auto a, auto b, auto c>
+CUTE_HOST_DEVICE constexpr
+typename R<b,a*c>::type
+ratio(R<b,c>, C<a>) {
+  return {};
+}
+
+template <auto a, auto b, auto c, auto d>
+CUTE_HOST_DEVICE constexpr
+typename R<a*d,b*c>::type
+ratio(R<a,b>, R<c,d>) {
+  return {};
+}
+
+//
+// Non-reduced ratio implementations
+//
+
+template <auto a, auto b>
+CUTE_HOST_DEVICE constexpr
+R<a,b>
+nratio(C<a>, C<b>) {
+  return {};
+}
+
+template <auto a, auto b, auto c>
+CUTE_HOST_DEVICE constexpr
+R<a*c,b>
+nratio(C<a>, R<b,c>) {
+  return {};
+}
+
+template <auto a, auto b, auto c>
+CUTE_HOST_DEVICE constexpr
+R<b,a*c>
+nratio(R<b,c>, C<a>) {
+  return {};
+}
+
+template <auto a, auto b, auto c, auto d>
+CUTE_HOST_DEVICE constexpr
+R<a*d,b*c>
+nratio(R<a,b>, R<c,d>) {
+  return {};
+}
+
+//
+// Operators
+//
+
 template <auto a, auto b, auto x, auto y>
 CUTE_HOST_DEVICE constexpr
-typename R<a*x,b*y>::type 
+typename R<a*x,b*y>::type
 operator*(R<a,b>, R<x,y>) {
   return {};
 }
 
 template <auto a, auto b, auto c>
 CUTE_HOST_DEVICE constexpr
-typename R<a*c,b>::type 
+typename R<a*c,b>::type
 operator*(R<a,b>, C<c>) {
   return {};
 }
 
 template <auto c, auto a, auto b>
 CUTE_HOST_DEVICE constexpr
-typename R<a*c,b>::type 
+typename R<a*c,b>::type
 operator*(C<c>, R<a,b>) {
+  return {};
+}
+
+template <auto c, auto a, auto b>
+CUTE_HOST_DEVICE constexpr
+typename R<c*b,a>::type
+operator/(C<c>, R<a,b>) {
   return {};
 }
 
@@ -109,28 +182,28 @@ operator*(R<a,b>, C const& c) {
 
 template <auto a, auto b, auto x, auto y>
 CUTE_HOST_DEVICE constexpr
-typename R<a*y+b*x, b*y>::type 
+typename R<a*y+b*x, b*y>::type
 operator+(R<a,b>, R<x,y>) {
   return {};
 }
 
 template <auto a, auto b, auto c>
 CUTE_HOST_DEVICE constexpr
-typename R<a+c*b,b>::type 
+typename R<a+c*b,b>::type
 operator+(R<a,b>, C<c>) {
   return {};
 }
 
 template <auto c, auto a, auto b>
 CUTE_HOST_DEVICE constexpr
-typename R<a+c*b,b>::type 
+typename R<a+c*b,b>::type
 operator+(C<c>, R<a,b>) {
   return {};
 }
 
 template <auto a, auto b, auto x, auto y>
 CUTE_HOST_DEVICE constexpr
-bool_constant<R<a,b>::num == R<x,y>::num && R<a,b>::den == R<x,y>::den> 
+bool_constant<R<a,b>::num == R<x,y>::num && R<a,b>::den == R<x,y>::den>
 operator==(R<a,b>, R<x,y>) {
   return {};
 }
@@ -144,16 +217,33 @@ operator==(R<a,b>, C<c>) {
 
 template <auto c, auto a, auto b>
 CUTE_HOST_DEVICE constexpr
-bool_constant<R<a,b>::num == c && R<a,b>::den == 1> 
+bool_constant<R<a,b>::num == c && R<a,b>::den == 1>
 operator==(C<c>, R<a,b>) {
   return {};
 }
 
 template <auto a, auto b>
 CUTE_HOST_DEVICE constexpr
-typename R<abs(a),abs(b)>::type 
+typename R<abs(a),abs(b)>::type
 abs(R<a,b>) {
   return {};
+}
+
+template <auto a, auto b>
+CUTE_HOST_DEVICE constexpr
+int32_t
+log_2(R<a,b>) {
+  static_assert(R<a,b>::num > 0);
+  static_assert(R<a,b>::den > 0);
+  return log_2(static_cast<uint32_t>(R<a,b>::num)) - log_2(static_cast<uint32_t>(R<a,b>::den));
+}
+
+// @return A non-reduced ratio cute::R of the Trait0::value / Trait1::value
+template <class Trait0, class Trait1>
+CUTE_HOST_DEVICE constexpr
+auto
+trait_ratio(Trait0, Trait1) {
+  return nratio(static_value<Trait0>(), static_value<Trait1>());
 }
 
 //

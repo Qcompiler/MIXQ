@@ -1,6 +1,6 @@
-################################################################################
+#################################################################################################
 #
-# Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved
+# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -28,13 +28,13 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
-################################################################################
+#################################################################################################
 
 """
 Utilities for expressing shapes
 """
 
-from cutlass import (
+from cutlass_library import (
     ConvMode,
     ConvKind,
     LayoutType
@@ -64,7 +64,7 @@ class MatrixCoord:
         Returns the leading dimension for a matrix with layout ``layout`` and shape provided by the MatrixCoord.
 
         :param layout: layout of matrix
-        :type layout: cutlass.LayoutType
+        :type layout: cutlass_library.LayoutType
 
         :returns: leading dimension
         :rtype: int

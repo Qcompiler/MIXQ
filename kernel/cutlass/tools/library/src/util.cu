@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -333,7 +333,7 @@ static struct {
 }
 OperationKind_enumerants[] = {
   {"eq_gemm", "EqGemm", OperationKind::kEqGemm}, 
-  {"gemm", "Gemm", OperationKind::kGemm},               
+  {"gemm", "Gemm", OperationKind::kGemm},
   {"rank_k", "RankK", OperationKind::kRankK},
   {"rank_2k", "Rank2K", OperationKind::kRank2K},
   {"trmm", "Trmm", OperationKind::kTrmm},
@@ -419,6 +419,8 @@ Status from_string<Status>(std::string const &str) {
 
   return Status::kInvalid;
 }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1202,7 +1204,7 @@ std::string lexical_cast(int64_t int_value) {
 /// Lexical cast TO a string FROM a byte array. Returns true if cast is successful or false if invalid.
 std::string lexical_cast(std::vector<uint8_t> &bytes, NumericTypeID type) {
 
-  int size_bytes = sizeof_bits(type) / 8;
+  size_t size_bytes = sizeof_bits(type) / 8;
 
   if (!size_bytes || size_bytes != bytes.size()) {
     return "<invalid>";

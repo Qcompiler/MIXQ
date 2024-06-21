@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -117,9 +117,11 @@ void FilterArchitecture() {
     { "SM70*",                      70, 75},
     { "SM75*",                      75, kMaxDevice},
     { "SM80*",                      80, kMaxDevice},
-    { "SM90*",                      90, 90        },
+    { "SM89*",                      89, 89},
+    { "SM90*",                      90, 90},
     { 0, 0, false }
   };
+
 
   // Set negative test filters
   std::stringstream ss;

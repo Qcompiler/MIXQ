@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -74,7 +74,10 @@ using CUTE_STL_NAMESPACE::is_void_v;
 using CUTE_STL_NAMESPACE::is_base_of;
 using CUTE_STL_NAMESPACE::is_base_of_v;
 
+using CUTE_STL_NAMESPACE::is_const;
 using CUTE_STL_NAMESPACE::is_const_v;
+using CUTE_STL_NAMESPACE::is_volatile;
+using CUTE_STL_NAMESPACE::is_volatile_v;
 
 // using CUTE_STL_NAMESPACE::true_type;
 // using CUTE_STL_NAMESPACE::false_type;
@@ -98,6 +101,9 @@ using CUTE_STL_NAMESPACE::is_lvalue_reference_v;
 using CUTE_STL_NAMESPACE::is_reference;
 using CUTE_STL_NAMESPACE::is_trivially_copyable;
 
+using CUTE_STL_NAMESPACE::is_convertible;
+using CUTE_STL_NAMESPACE::is_convertible_v;
+
 using CUTE_STL_NAMESPACE::is_same;
 using CUTE_STL_NAMESPACE::is_same_v;
 
@@ -115,28 +121,34 @@ template <class T>
 using is_std_integral = CUTE_STL_NAMESPACE::is_integral<T>;
 
 using CUTE_STL_NAMESPACE::is_empty;
+using CUTE_STL_NAMESPACE::is_empty_v;
 
 using CUTE_STL_NAMESPACE::invoke_result_t;
+
+using CUTE_STL_NAMESPACE::common_type;
+using CUTE_STL_NAMESPACE::common_type_t;
+
+using CUTE_STL_NAMESPACE::remove_pointer;
+using CUTE_STL_NAMESPACE::remove_pointer_t;
 
 // <utility>
 using CUTE_STL_NAMESPACE::declval;
 
-template< class T >
+template <class T>
 constexpr T&& forward(remove_reference_t<T>& t) noexcept
 {
   return static_cast<T&&>(t);
 }
 
-template< class T >
+template <class T>
 constexpr T&& forward(remove_reference_t<T>&& t) noexcept
 {
-  static_assert(! is_lvalue_reference_v<T>,
-    "T cannot be an lvalue reference (e.g., U&).");
+  static_assert(! is_lvalue_reference_v<T>, "T cannot be an lvalue reference (e.g., U&).");
   return static_cast<T&&>(t);
 }
 
-template< class T >
-constexpr remove_reference_t<T>&& move( T&& t ) noexcept
+template <class T>
+constexpr remove_reference_t<T>&& move(T&& t) noexcept
 {
   return static_cast<remove_reference_t<T>&&>(t);
 }
@@ -238,4 +250,15 @@ is_valid(F&&, Args&&...) {
   return detail::is_valid_impl<F&&, Args&&...>(int{});
 }
 
+template <bool B, template<class...> class True, template<class...> class False>
+struct conditional_template {
+  template <class... U>
+  using type = True<U...>;
+};
+
+template <template<class...> class True, template<class...> class False>
+struct conditional_template<false, True, False> {
+  template <class... U>
+  using type = False<U...>;
+};
 } // end namespace cute

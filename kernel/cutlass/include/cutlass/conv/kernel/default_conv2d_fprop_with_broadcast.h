@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,7 +31,7 @@
 
 /*! \file
   \brief 
-    Defines a GEMM with Reduction based on an existing UniversalGemm kernel.
+    Defines a GEMM with Broadcast based on an existing UniversalGemm kernel.
 
 */
 
@@ -71,7 +71,7 @@ template <
   int Stages,
   typename MathOperatorTag,
   conv::IteratorAlgorithm IteratorAlgorithm = IteratorAlgorithm::kOptimized,
-  conv::StrideSupport StrideSupport = StrideSupport::kStrided,
+  conv::StrideSupport StrideSupport = StrideSupport::kUnity,
   /// Access granularity of A matrix in units of elements
   int AlignmentA = 128 / cutlass::sizeof_bits<ElementA>::value,
   /// Access granularity of B matrix in units of elements
@@ -105,6 +105,97 @@ struct DefaultConv2dFpropWithBroadcast {
     typename ImplicitGemmBase::Epilogue::Shape,
     typename ImplicitGemmBase::Epilogue::WarpMmaOperator,
     ImplicitGemmBase::Epilogue::kPartitionsK,
+    ElementC,
+    typename EpilogueOutputOp::ElementT,
+    typename EpilogueOutputOp::ElementVector,
+    EpilogueOutputOp,
+    ImplicitGemmBase::Epilogue::kElementsPerAccess
+  >::Epilogue;
+
+  // Define the kernel
+  using Kernel = cutlass::conv::kernel::ImplicitGemmConvolutionWithFusedEpilogue<
+    typename ImplicitGemmBase::Mma,
+    Epilogue,
+    ThreadblockSwizzle,
+    conv::Operator::kFprop
+  >;
+};
+
+/////////////////////////////////////////////////////////////////////////////////////////////////
+//                            OpClassSimt convolutions
+/////////////////////////////////////////////////////////////////////////////////////////////////
+/// Defines a kernel for Conv2dFprop specialization for Analytic IteratorAlgorithm,
+/// multi-stage pipeline, and FFMA-based mainloop for SM80
+
+template <
+  typename ElementA,
+  typename LayoutA,
+  typename ElementB,
+  typename LayoutB,
+  typename ElementC,
+  typename LayoutC,
+  typename ElementAccumulator,
+  typename ArchTag,
+  typename ThreadblockShape,
+  typename WarpShape,
+  typename InstructionShape,
+  typename EpilogueOutputOp,
+  typename ThreadblockSwizzle,
+  int Stages,
+  typename MathOperatorTag,
+  conv::IteratorAlgorithm IteratorAlgorithm,
+  conv::StrideSupport StrideSupport,
+  int AlignmentA,
+  int AlignmentB
+>
+struct DefaultConv2dFpropWithBroadcast <
+  ElementA,
+  LayoutA,
+  ElementB,
+  LayoutB,
+  ElementC,
+  LayoutC,
+  ElementAccumulator,
+  arch::OpClassSimt,
+  ArchTag,
+  ThreadblockShape,
+  WarpShape,
+  InstructionShape,
+  EpilogueOutputOp,
+  ThreadblockSwizzle,
+  Stages,
+  MathOperatorTag,
+  IteratorAlgorithm,
+  StrideSupport,
+  AlignmentA,
+  AlignmentB
+> {
+
+  using ImplicitGemmBase = typename DefaultConv2dFprop<
+    ElementA, LayoutA,
+    ElementB, LayoutB,
+    ElementC, LayoutC,
+    ElementAccumulator,
+    arch::OpClassSimt,
+    ArchTag,
+    ThreadblockShape,
+    WarpShape,
+    InstructionShape,
+    EpilogueOutputOp,
+    ThreadblockSwizzle,
+    Stages,
+    MathOperatorTag,
+    IteratorAlgorithm,
+    StrideSupport,
+    AlignmentA,
+    AlignmentB
+  >::Kernel;
+
+  // Define epilogue
+  using Epilogue = typename cutlass::conv::kernel::detail::DefaultConvEpilogueWithBroadcastSimt<
+    ArchTag,
+    typename ImplicitGemmBase::Epilogue::Shape,
+    typename ImplicitGemmBase::Epilogue::WarpMmaOperator,
     ElementC,
     typename EpilogueOutputOp::ElementT,
     typename EpilogueOutputOp::ElementVector,

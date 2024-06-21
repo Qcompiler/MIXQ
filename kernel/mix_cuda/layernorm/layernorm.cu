@@ -276,11 +276,11 @@ __global__ void generalT5LayerNorm_extract_outliers_int4(
     for (int i = tid ; i < colsDst; i += size){
         __half data1  = __hdiv( start[2*i + 0], quant_scales );
         __half data2  = __hdiv( start[2*i + 1], quant_scales );
-        Int4Subbyte{reinterpret_cast<cutlass::int4b_t *>(&storage), 0}.set(
-            __half2int_rn(data1));
+        // Int4Subbyte{reinterpret_cast<cutlass::int4b_t *>(&storage), 0}.set(
+        //     __half2int_rn(data1));
         
-        Int4Subbyte{reinterpret_cast<cutlass::int4b_t *>(&storage), 1}.set(
-            __half2int_rn(data2));            
+        // Int4Subbyte{reinterpret_cast<cutlass::int4b_t *>(&storage), 1}.set(
+        //     __half2int_rn(data2));            
         d_out[i] =  storage ; 
     }
 

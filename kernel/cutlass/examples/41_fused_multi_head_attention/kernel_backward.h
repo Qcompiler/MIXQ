@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -12,7 +12,7 @@
  * this list of conditions and the following disclaimer in the documentation
  * and/or other materials provided with the distribution.
  *
- * 3. Neither the name of the copyright holdvr nor the names of its
+ * 3. Neither the name of the copyright holder nor the names of its
  * contributors may be used to endorse or promote products derived from
  * this software without specific prior written permission.
  *
@@ -1446,7 +1446,7 @@ struct AttentionBackwardKernel {
       uint8_t lane_id) {
     cutlass::Array<cutlass::uint1b_t, MatmulDOIVJ::Mma::FragmentC::kElements>
         dropout_keep_mask_doivj;
-    dropout_keep_mask_doivj.fill(1);
+    dropout_keep_mask_doivj.fill(cutlass::uint1b_t{1});
     const float dropout_scale =
         kApplyDropout ? 1.0 / (1.0 - p.dropout_prob) : 1.0f;
 
@@ -1744,7 +1744,7 @@ struct AttentionBackwardKernel {
             [&](int accum_m) {},
             [&](int accum_m /*q*/, int accum_n /*k*/, int idx) {
               if (zij.at({accum_n, accum_m}) == scalar_t(0)) {
-                dropout_keep_mask_doivj[idx] = cutlass::uint1b_t(0);
+                dropout_keep_mask_doivj[idx] = cutlass::uint1b_t{0};
               }
             },
             [&](int accum_m) {});

@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -34,7 +34,7 @@
 Emitter for Sm90 Epilogue Visitor
 """
 
-from cutlass import DataTypeTag, EpilogueScheduleTag
+from cutlass_library import DataTypeTag, EpilogueScheduleTag
 from cutlass.backend import GemmOperationUniversal
 from cutlass.backend.evt.backend.emitter_base import FusionCallbacks
 

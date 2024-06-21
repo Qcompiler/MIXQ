@@ -1,4 +1,4 @@
-# Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -136,6 +136,8 @@ function(cutlass_add_cutlass_library)
       EXPORT_NAME ${__EXPORT_NAME}
       ""
       )
+
+    target_compile_features(${__NAME} INTERFACE cxx_std_17)
     
     set_target_properties(
       ${__NAME}
@@ -159,6 +161,8 @@ function(cutlass_add_cutlass_library)
       EXPORT_NAME ${__EXPORT_NAME}_static
       ""
       )
+
+    target_compile_features(${__NAME}_static INTERFACE cxx_std_17)
     
     if (WIN32)
       set(STATIC_OUTPUT_NAME ${__OUTPUT_NAME}.static)
@@ -196,8 +200,8 @@ function(cutlass_add_cutlass_library)
       # to the main cutlass library so users automatically get the necessary link
       # commands to pull in all kernels by default.
     
-      target_link_libraries(${DEFAULT_NAME} INTERFACE ${__NAME})
-      target_link_libraries(${DEFAULT_NAME}_static INTERFACE ${__NAME}_static)
+      target_link_libraries(${DEFAULT_NAME} PUBLIC ${__NAME})
+      target_link_libraries(${DEFAULT_NAME}_static PUBLIC ${__NAME}_static)
     
     endif()
 
@@ -246,6 +250,7 @@ cutlass_add_cutlass_library(
 
 # For backward compatibility with the old name
 add_library(cutlass_lib ALIAS cutlass_library)
+add_library(cutlass_lib_static ALIAS cutlass_library_static)
 
 ################################################################################
 
@@ -264,7 +269,8 @@ set(CUTLASS_LIBRARY_GENERATED_KERNEL_LIST_FILE ${CMAKE_CURRENT_BINARY_DIR}/gener
 # in ${CMAKE_CURRENT_BINARY_DIR}/library_instance_generation.log, set this parameter to INFO
 execute_process(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../../python/cutlass_library
-  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../../python/cutlass_library/generator.py
+  COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CUTLASS_LIBRARY_PACKAGE_DIR}
+    ${Python3_EXECUTABLE} ${CUTLASS_SOURCE_DIR}/python/cutlass_library/generator.py
     --operations "${CUTLASS_LIBRARY_OPERATIONS}" 
     --build-dir ${PROJECT_BINARY_DIR}
     --curr-build-dir ${CMAKE_CURRENT_BINARY_DIR}
@@ -272,9 +278,11 @@ execute_process(
     --architectures "${CUTLASS_NVCC_ARCHS_ENABLED}"
     --kernels "${CUTLASS_LIBRARY_KERNELS}"
     --ignore-kernels "${CUTLASS_LIBRARY_IGNORE_KERNELS}"
+    --kernel-filter-file "${KERNEL_FILTER_FILE}"
     --selected-kernel-list "${CUTLASS_LIBRARY_GENERATED_KERNEL_LIST_FILE}"
     --cuda-version "${CUTLASS_GENERATOR_CUDA_COMPILER_VERSION}"
     --log-level DEBUG
+    --disable-cutlass-package-imports
   RESULT_VARIABLE cutlass_lib_INSTANCE_GENERATION_RESULT
   OUTPUT_VARIABLE cutlass_lib_INSTANCE_GENERATION_OUTPUT
   OUTPUT_FILE ${CMAKE_CURRENT_BINARY_DIR}/library_instance_generation.log

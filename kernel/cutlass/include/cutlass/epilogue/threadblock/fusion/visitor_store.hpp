@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -74,6 +74,12 @@ struct VisitorAuxStore{
     return args;
   }
 
+  template <class ProblemShape>
+  static size_t
+  get_workspace_size(ProblemShape const& problem_shape, Arguments const& args) {
+    return 0;
+  }
+
   struct SharedStorage {};
 
   static int constexpr vec_bits = ThreadMap::kElementsPerAccess * sizeof_bits<Element>::value;
@@ -118,7 +124,7 @@ struct VisitorAuxStore{
 
     template <class ElementAccumulator, class ElementInput, int FragmentSize>
     CUTLASS_DEVICE auto // returns an Array
-    visit(int iter_idx, int row_idx, int column_idx, int frg_idx, 
+    visit(int iter_idx, int row_idx, int column_idx, int frg_idx,
           Array<ElementAccumulator, FragmentSize> const& frg_acc,
           Array<ElementInput, FragmentSize> const& frg_input) {
       using ConvertInput = NumericArrayConverter<Element, ElementInput, FragmentSize, RoundStyle>;
@@ -152,8 +158,8 @@ struct VisitorAuxStore{
     ProblemShape problem_shape
   ) {
     Tensor mAux = make_tensor(
-      make_gmem_ptr(params_ptr->ptr_aux), 
-      problem_shape, 
+      make_gmem_ptr(params_ptr->ptr_aux),
+      problem_shape,
       params_ptr->dAux);   // (M,N,L)
     // VECTOR, FRAGMENT_COLUMN, FRAGMENT_ROW, ITERATION_ROW, ITERATION_GROUP, ITERATION_CLUSTER
     Tensor tC_gAux = recast<VecType>(group_modes<3,6>(ThreadMap::partition(mAux, thread_idx, threadblock_tile_offset)));
@@ -161,14 +167,14 @@ struct VisitorAuxStore{
 
     // Generate the pred tensor
     Tensor cAux = make_identity_tensor(mAux.shape());
-    Tensor tC_cAux = local_partition(
+    Tensor tC_cAux = outer_partition(
       group_modes<3,6>(ThreadMap::partition(cAux, thread_idx, threadblock_tile_offset)),
       Shape<Int<VecLength>>{},
       (_0{})
     );
 
     return Callbacks<
-      decltype(tC_gAux), decltype(tC_rAux), 
+      decltype(tC_gAux), decltype(tC_rAux),
       decltype(tC_cAux), ProblemShape>(
       cute::move(tC_gAux),
       cute::move(tC_rAux),
@@ -186,7 +192,7 @@ struct VisitorAuxStore{
 /////////////////////////////////////////////////////////////////////////////////////////////////
 // Helper functions
 template <
-  template <class> class ReduceFn, 
+  template <class> class ReduceFn,
   int kThreads, class T>
 CUTLASS_DEVICE
 void intra_warp_row_reduce(T& value) {
@@ -258,6 +264,12 @@ struct VisitorColReduction {
     return args;
   }
 
+  template <class ProblemShape>
+  static size_t
+  get_workspace_size(ProblemShape const& problem_shape, Arguments const& args) {
+    return 0;
+  }
+
   struct SharedStorage { };
 
   CUTLASS_HOST_DEVICE
@@ -266,7 +278,7 @@ struct VisitorColReduction {
   CUTLASS_HOST_DEVICE
   VisitorColReduction(Params const& params, SharedStorage const& shared_storage)
     : params_ptr(&params) { }
-  
+
   Params const* params_ptr;
 
   template <class GTensor, class CTensor, class ProblemShape>
@@ -307,7 +319,7 @@ struct VisitorColReduction {
 
     template <class ElementAccumulator, class ElementInput, int FragmentSize>
     CUTLASS_DEVICE auto // returns an Array
-    visit(int iter_idx, int row_idx, int column_idx, int frg_idx, 
+    visit(int iter_idx, int row_idx, int column_idx, int frg_idx,
           Array<ElementAccumulator, FragmentSize> const& frg_acc,
           Array<ElementInput, FragmentSize> const& frg_input) {
 
@@ -398,6 +410,12 @@ struct VisitorRowReduction {
     return args;
   }
 
+  template <class ProblemShape>
+  static size_t
+  get_workspace_size(ProblemShape const& problem_shape, Arguments const& args) {
+    return 0;
+  }
+
   using SharedStorageShape = decltype(select<0,1,2,3,5,8,10>(typename ThreadMap::ThreadMapShape{}));
 
   struct SharedStorage {
@@ -414,13 +432,13 @@ struct VisitorRowReduction {
   VisitorRowReduction(Params const& params, SharedStorage const& shared_storage)
     : params_ptr(&params),
       smem_reduce(const_cast<ElementCompute*>(shared_storage.reduction.data())) { }
-  
+
   Params const* params_ptr;
   ElementCompute* smem_reduce;
 
   template <
     class RTensorR2S, class STensorR2S, class CTensorR2S,
-    class STensorS2R, class RTensorS2R, class CTensorS2R, 
+    class STensorS2R, class RTensorS2R, class CTensorS2R,
     class GTensor, class CTensor, class ProblemShape>
   struct Callbacks : EmptyCallbacks {
     CUTLASS_DEVICE
@@ -465,7 +483,7 @@ struct VisitorRowReduction {
     // R->G
     GTensor tC_gRow;
     CTensor tC_cRow;
-    
+
     Params const* params_ptr;
     int n;
     int m;
@@ -477,10 +495,10 @@ struct VisitorRowReduction {
 
     template <class ElementAccumulator, class ElementInput, int FragmentSize>
     CUTLASS_DEVICE auto // returns an Array
-    visit(int iter_idx, int row_idx, int column_idx, int frg_idx, 
+    visit(int iter_idx, int row_idx, int column_idx, int frg_idx,
           Array<ElementAccumulator, FragmentSize> const& frg_acc,
           Array<ElementInput, FragmentSize> const& frg_input) {
-      
+
       using ConvertInput = NumericArrayConverter<ElementCompute, ElementInput, FragmentSize, RoundStyle>;
       ConvertInput convert_input{};
       Tensor tRS_rRow_frg = recast<Array<ElementCompute, FragmentSize>>(coalesce(tRS_rSrc));
@@ -528,13 +546,13 @@ struct VisitorRowReduction {
           atomic_reduce<AtomicReduceFn, RoundStyle>(&tC_gRow(j), tSR_rRows(j));
         }
 
-      }      
+      }
     }
 
   private:
 
     template <int FragmentSize>
-    CUTLASS_DEVICE ElementCompute 
+    CUTLASS_DEVICE ElementCompute
     reduction(Array<ElementCompute, FragmentSize>& reduce_buffer, Array<ElementCompute, FragmentSize> const& result) {
       using ReduceInput = RegReduceFn<ElementCompute>;
       ReduceInput reduce_input{};
@@ -556,7 +574,7 @@ struct VisitorRowReduction {
       make_gmem_ptr(params_ptr->ptr_row),
       problem_shape,
       params_ptr->dRow);
-    
+
     //
     // Step 1: reduce fragment input (Src) into tRS_rSrc
     //
@@ -567,7 +585,7 @@ struct VisitorRowReduction {
     Tensor cSrc = make_identity_tensor(mRow.shape());
     // FRAGMENT_COLUMN, FRAGMENT_ROW, (ITERATION_ROW, ITERATION_GROUP, ITERATION_CLUSTER)
     Tensor tRS_cSrc = group_modes<2,5>(ThreadMap::partition(cSrc, thread_idx, threadblock_tile_offset)(_0{},_,_,_,_,_));
-    
+
     //
     // Step 2: copy the partial results in tRS_rSrc to sRows in shared memory
     //
@@ -587,18 +605,18 @@ struct VisitorRowReduction {
     // VECTOR*ACCESS_WIDTH*FRAGMENT_COL,ACCESS_ROWS*WARPS_PER_ROW*GROUPS*CLUSTERS
     Tensor sRows_nm = coalesce(group_modes<1,5>(group_modes<0,3>(sRows)), Shape<_1,_1>{});
     // SMEM_ROW/THREADS,ACCESS_ROWS*WARPS_PER_ROW*GROUPS*CLUSTERS
-    Tensor tSR_sRows = local_partition(sRows_nm, Shape<Int<ThreadMap::kThreads>,_1>{}, thread_idx);
+    Tensor tSR_sRows = outer_partition(sRows_nm, Shape<Int<ThreadMap::kThreads>,_1>{}, thread_idx);
     // SMEM_ROW/THREADS
     Tensor tSR_rRows = make_tensor_like(tSR_sRows(_,_0{}));
     // Coord
     Tensor cRows_nm = make_identity_tensor(sRows_nm.shape());
-    Tensor tSR_cRows = local_partition(cRows_nm, Shape<Int<ThreadMap::kThreads>,_1>{}, thread_idx)(_,_0{});
-    
+    Tensor tSR_cRows = outer_partition(cRows_nm, Shape<Int<ThreadMap::kThreads>,_1>{}, thread_idx)(_,_0{});
+
     //
     // Step 4: atomically reduce the results to global memory
     //
-    
-    Tensor tC_gRow = local_partition(
+
+    Tensor tC_gRow = outer_partition(
       // Cta tile
       local_tile(
         mRow, typename ThreadMap::CtaShapeMNL{}, make_coord(_,_,_),Step<_1,_1, X>{}
@@ -608,7 +626,7 @@ struct VisitorRowReduction {
     )(_0{},_);
 
     Tensor cRow = make_identity_tensor(mRow.shape());
-    Tensor tC_cRow = local_partition(
+    Tensor tC_cRow = outer_partition(
       // Cta tile
       local_tile(
         cRow, typename ThreadMap::CtaShapeMNL{}, make_coord(_,_,_), Step<_1,_1, X>{}
@@ -672,6 +690,12 @@ struct VisitorScalarReduction {
     return args;
   }
 
+  template <class ProblemShape>
+  static size_t
+  get_workspace_size(ProblemShape const& problem_shape, Arguments const& args) {
+    return 0;
+  }
+
   struct SharedStorage { };
 
   CUTLASS_HOST_DEVICE
@@ -680,7 +704,7 @@ struct VisitorScalarReduction {
   CUTLASS_HOST_DEVICE
   VisitorScalarReduction(Params const& params, SharedStorage const& shared_storage)
     : params_ptr(&params) { }
-  
+
   Params const* params_ptr;
 
   template <class CTensor, class GTensor, class ProblemShape>
@@ -760,7 +784,7 @@ struct VisitorScalarReduction {
     );
 
     Tensor tC_gScalar = mScalar(_,_,threadblock_tile_offset.k());
-    
+
     return Callbacks<
       decltype(tC_cSrc), decltype(tC_gScalar),
       ProblemShape>(

@@ -1,6 +1,6 @@
-![ALT](/media/images/gemm-hierarchy-with-epilogue-no-labels.png "CUTLASS Quick Start Guide")
+![ALT](../images/gemm-hierarchy-with-epilogue-no-labels.png "CUTLASS Quick Start Guide")
 
-[README](/README.md#documentation) > **Quick Start**
+[README](../../README.md#documentation) > **Quick Start**
 
 # Quickstart
 
@@ -33,7 +33,7 @@ executing the following CMake command in an empty `build/` directory.
 $ cmake .. -DCUTLASS_NVCC_ARCHS=90a -DCUTLASS_ENABLE_TESTS=OFF -DCUTLASS_UNITY_BUILD_ENABLED=ON
 ```
 
-This reduces overall compilation time by excluding unit tests and enabling the unit build.
+This reduces overall compilation time by excluding unit tests and enabling the unity build.
 
 You may reduce build times by compiling only certain operations by setting the `CUTLASS_LIBRARY_OPERATIONS` flag as shown below,
 executed from an empty `build/` directory. This only compiles 2-D convolution kernels.
@@ -56,7 +56,7 @@ You may explicitly exclude cuBLAS and cuDNN as dependencies with the following C
 
 ## Build and run the CUTLASS Profiler
 
-From the `build/` directory created above, compile the the CUTLASS Profiler.
+From the `build/` directory created above, compile the CUTLASS Profiler.
 ```bash
 $ make cutlass_profiler -j12
 ```
@@ -654,7 +654,7 @@ $ cmake .. -DCUTLASS_NVCC_ARCHS='70;75;80' -DCUTLASS_LIBRARY_KERNELS=tensorop*s*
 
 # Copyright
 
-Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: BSD-3-Clause
 
 ```

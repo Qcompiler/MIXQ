@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -92,11 +92,11 @@ struct VisitorImpl2x: fusion::detail::Sm90VisitorImplBase<Ops...> {
     /// Called after accumulators have been exchanged for each accumulator vector
     template <typename ElementAccumulator, typename... ElementInputs, int FragmentSize>
     CUTLASS_DEVICE auto // returns an Array
-    visit(int iter_idx, int row_idx, int column_idx, int frg_idx, 
+    visit(int iter_idx, int row_idx, int column_idx, int frg_idx,
           Array<ElementAccumulator, FragmentSize> const& frg_acc,
           Array<ElementInputs, FragmentSize> const&... frg_inputs) // depends on the N-naryness of the op
       = delete; // Must be implemented for each operation
-    
+
     /// Called at the start of a row
     CUTLASS_DEVICE void
     end_row(int row_idx) {
@@ -179,12 +179,12 @@ struct TreeVisitor2x : VisitorImpl2x<ChildOps..., NodeOp> {
     CUTLASS_DEVICE
     Callbacks(CallbacksImpl&& impl)
       : CallbacksImpl(cute::forward<CallbacksImpl>(impl)) {}
-    
+
     using CallbacksImpl::callbacks_tuple;
 
     template <typename ElementAccumulator, int FragmentSize>
     CUTLASS_DEVICE auto
-    visit(int iter_idx, int row_idx, int column_idx, int frg_idx, 
+    visit(int iter_idx, int row_idx, int column_idx, int frg_idx,
           Array<ElementAccumulator, FragmentSize> const& frg_acc) {
       constexpr int Rm1 = sizeof...(ChildOps);
       return cute::detail::tapply(callbacks_tuple,
@@ -232,7 +232,7 @@ template<
 >
 struct TopologicalVisitor2x : VisitorImpl2x<Ops...> {
   static_assert(is_static_v<EdgeTuple>);
-  static_assert(rank(EdgeTuple{}) == sizeof...(Ops));
+  static_assert(cute::rank(EdgeTuple{}) == sizeof...(Ops));
   static_assert(sizeof...(Ops) > 1);
 
   using VisitorImpl2x<Ops...>::VisitorImpl2x;
@@ -242,16 +242,16 @@ struct TopologicalVisitor2x : VisitorImpl2x<Ops...> {
     CUTLASS_DEVICE
     Callbacks(CallbacksImpl&& impl)
       : CallbacksImpl(cute::forward<CallbacksImpl>(impl)) {}
-    
+
     using CallbacksImpl::callbacks_tuple;
 
     template <typename ElementAccumulator, int FragmentSize>
     CUTLASS_DEVICE auto
-    visit(int iter_idx, int row_idx, int column_idx, int frg_idx, 
+    visit(int iter_idx, int row_idx, int column_idx, int frg_idx,
           Array<ElementAccumulator, FragmentSize> const& frg_acc) {
       constexpr int Rm1 = sizeof...(Ops) - 1;
       auto frg_compute_tuple = cute::repeat<Rm1>(Array<ElementCompute, FragmentSize>{});
-      
+
       return cute::detail::tapply(EdgeTuple{}, callbacks_tuple, frg_compute_tuple,
         // Visit the first R-1 ops in topological order
         [&] (auto&& edge_seq, auto& callbacks, auto& frg_compute) {
@@ -271,7 +271,7 @@ struct TopologicalVisitor2x : VisitorImpl2x<Ops...> {
         return frg_compute;
       },
       // Visit the last op
-      [&] (auto const&...) {
+      [&] (auto const&...ops) {
         return cute::detail::apply(frg_compute_tuple,
           // Compute the last op with children inputs
           [&] (auto const&... frg_inputs) {
@@ -343,7 +343,7 @@ struct OutputTileThreadLayout: DefaultThreadMapTensorOp<
   ThreadblockShape_::kK/WarpShape_::kK,
   Element_,
   ElementsPerAccess>::Type {
-  
+
   using Base = typename DefaultThreadMapTensorOp<
     ThreadblockShape_,
     WarpShape_,
@@ -402,7 +402,7 @@ struct OutputTileThreadLayout: DefaultThreadMapTensorOp<
 
   CUTLASS_DEVICE
   static auto tid2coord(int thread_idx) {
-    return make_layout(ThreadShape{})[thread_idx];
+    return cute::idx2crd(thread_idx, ThreadShape{});
   }
 
   template <class TensorInput>

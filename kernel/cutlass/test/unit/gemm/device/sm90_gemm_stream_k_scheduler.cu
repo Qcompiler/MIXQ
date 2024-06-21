@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -62,10 +62,10 @@ run_scheduler(int* visit_counters, typename Scheduler::Params params, TileShape 
   Scheduler scheduler{params};
   auto work_tile_info = scheduler.get_current_work();
 
-  while (work_tile_info.is_valid_tile) {
+  while (work_tile_info.is_valid()) {
     // Increment counters to indicate coverage
     auto tile_idx = Scheduler::output_tile_index(params, work_tile_info);
-    auto offset = tile_idx * params.k_tiles_per_output_tile_ + work_tile_info.K_idx;
+    auto offset = tile_idx * params.divmod_tiles_per_output_tile_.divisor + work_tile_info.K_idx;
     for (auto i = 0; i < work_tile_info.k_tile_count; ++i) {
       // Use atomicAdd because the visit counters are shared by multiple thread blocks.
       // While having more than one block increment the same counter indicates failure,
@@ -101,27 +101,49 @@ test_scheduler(
   cutlass::KernelHardwareInfo hw_info{0, sm_count};
   auto params = Scheduler::to_underlying_arguments(problem_shape_mnkl, tile_shape, cluster_shape, hw_info, {splits}, nullptr);
 
+  typename Scheduler::Arguments args{};
+
+  // Set up the grid for the problem
+  dim3 grid = Scheduler::get_grid_shape(problem_shape_mnkl, tile_shape, cluster_shape, hw_info, args);
+
+  auto print_info = [&]() {
+    std::cout << "Failed with problem size "
+      << size<0>(problem_shape_mnkl) << "x"
+      << size<1>(problem_shape_mnkl) << "x"
+      << size<2>(problem_shape_mnkl) << "x"
+      << size<3>(problem_shape_mnkl)
+      << " and grid size " << grid.x << "x"
+      << grid.y << "x" << grid.z
+      << " splits=" << params.splits_
+      << " k_iter=" << params.divmod_tiles_per_output_tile_.divisor
+      << " big_units_=" << params.big_units_
+      << " big_groups_=" << params.big_groups_
+      << " sk_tiles=" << params.sk_tiles_
+      << " sk_units=" << params.sk_units_
+      << " k_tiles_per_sk_unit=" << params.k_tiles_per_sk_unit_
+      << " units_per_problem=" << params.units_per_problem_
+      << " groups=" << params.divmod_sk_groups_.divisor << std::endl;
+  };
+
   // If we expect the schedule to be data-parallel only, ensure that no stream-K tiles are launched.
   if (expect_data_parallel && params.sk_tiles_ != 0) {
+    print_info();
+    std::cout << "Expected stream-K to select a data-parallel decomposition." << std::endl;
     return false;
   }
 
   // Allocate counters indicating the number of times each k iteration of each output tile has been visited
   auto [blk_m, blk_n, blk_l] = Scheduler::get_tiled_cta_shape_mnl(problem_shape_mnkl, tile_shape, cluster_shape);
-  auto total_counters = blk_m * blk_n * blk_l * params.k_tiles_per_output_tile_;
+  auto total_counters = blk_m * blk_n * blk_l * params.divmod_tiles_per_output_tile_.divisor;
   cutlass::DeviceAllocation<int> visit_counters(total_counters);
 
   // Initialize counters to zero
   cudaError_t err = cudaMemset((void*)visit_counters.get(), 0, sizeof(int) * total_counters);
   if (err != cudaSuccess) {
-    std::cerr << __FILE__ << ":" << __LINE__ << " cudaMemset failed with error: " << cudaGetErrorString(err) << std::endl;
+    print_info();
+    std::cout << __FILE__ << ":" << __LINE__ << " cudaMemset failed with error: " << cudaGetErrorString(err) << std::endl;
     return false;
   }
-
-  typename Scheduler::Arguments args{};
-
-  // Set up the grid for the problem
-  dim3 grid = Scheduler::get_grid_shape(problem_shape_mnkl, tile_shape, cluster_shape, hw_info, args);
 
   // Set up cluster and cluster launch. This is needed even for this simple kernel because
   // the SM90 scheduler needs to be able to query the CTA id within a cluster, which requires
@@ -161,7 +183,8 @@ test_scheduler(
   err = cudaLaunchKernelExC(&launch_config, kernel, kernel_params);
 
   if (err != cudaSuccess) {
-    std::cerr << __FILE__ << ":" << __LINE__
+    print_info();
+    std::cout << __FILE__ << ":" << __LINE__
               << " cudaLaunchKernelExC failed with error: "
               << cudaGetErrorString(err) << std::endl;
     return false;
@@ -169,7 +192,8 @@ test_scheduler(
 
   err = cudaDeviceSynchronize();
   if (err != cudaSuccess) {
-    std::cerr << __FILE__ << ":" << __LINE__
+    print_info();
+    std::cout << __FILE__ << ":" << __LINE__
               << " scheduler kernel failed with error: "
               << cudaGetErrorString(err) << std::endl;
     return false;
@@ -181,21 +205,7 @@ test_scheduler(
 
   for (size_t i = 0; i < host_visit_counts.size(); ++i) {
     if (host_visit_counts[i] != 1) {
-  // for (int count : host_visit_counts) {
-    // if (count != 1) {
-      std::cout << "Failed with problem size "
-                << size<0>(problem_shape_mnkl) << "x"
-                << size<1>(problem_shape_mnkl) << "x"
-                << size<2>(problem_shape_mnkl) << "x"
-                << size<3>(problem_shape_mnkl)
-                << " and grid size " << grid.x << "x"
-                << grid.y << "x" << grid.z
-                << " splits=" << params.splits_
-                << " k_iter=" << params.k_tiles_per_output_tile_
-                << " big_units=" << params.big_units_
-                << " sk_tiles=" << params.sk_tiles_
-                << " sk_units=" << params.sk_units_
-                << " k_tiles_per_sk_unit=" << params.k_tiles_per_sk_unit_ << std::endl;
+      print_info();
       std::cout << "Error at idx: " << i << ". Got count " << host_visit_counts[i] << std::endl;
       return false;
     }
@@ -302,7 +312,7 @@ TEST(SM90_Device_Gemm_stream_k_scheduler, 256x128x64_2x1x1) {
   // Test various data-parallel cases
   EXPECT_TRUE(test_data_parallel(/*blocks_m=*/ 4, /*blocks_n=*/ 4, tile_shape, cluster_shape, /*sm_count=*/ 16));
   EXPECT_TRUE(test_data_parallel(/*blocks_m=*/16, /*blocks_n=*/ 4, tile_shape, cluster_shape, /*sm_count=*/ 64));
-  EXPECT_TRUE(test_data_parallel(/*blocks_m=*/ 4, /*blocks_n=*/27, tile_shape, cluster_shape, /*sm_count=*/108));
+  EXPECT_TRUE(test_data_parallel(/*blocks_m=*/ 8, /*blocks_n=*/27, tile_shape, cluster_shape, /*sm_count=*/108));
 
   // Test various stream-K cases
   EXPECT_TRUE(test_stream_k(tile_shape, cluster_shape, /*sm_count=*/ 16));

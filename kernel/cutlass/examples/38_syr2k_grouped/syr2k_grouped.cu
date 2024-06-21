@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -398,7 +398,7 @@ struct Options {
       << "$ ./examples/38_syr2k_grouped/38_syr2k_grouped --benchmark=problems.txt\n\n"
 
       << "# Execute Grouped SYR2K and profile with NSight\n"
-      << "$ nv-nsight-cu-cli ./examples/24_gemm_grouped/24_gemm_grouped --n=256 --k=256 --verbose=true --iterations=1 --reference-check=false\n\n";
+      << "$ nv-nsight-cu-cli ./examples/38_syr2k_grouped/38_syr2k_grouped --n=256 --k=256 --verbose=true --iterations=1 --reference-check=false\n\n";
 
     return out;
   }
@@ -803,7 +803,7 @@ public:
     // Use 'D' for the in/out workspace
     this->block_D.copy_from_device(this->block_C.get());
 
-    for (int i = 0; i < this->options.problem_sizes.size(); ++i) {
+    for (size_t i = 0; i < this->options.problem_sizes.size(); ++i) {
       cutlass::gemm::GemmCoord const & problem = this->options.problem_sizes[i];
       int32_t batch_count = 1;
       int64_t lda = this->lda_host.at(i);
@@ -904,10 +904,10 @@ public:
     // Run profiling loop
     //
 
-    int last_stream_idx = 0;
+    size_t last_stream_idx = 0;
 
     for (int iter = 0; iter < this->options.iterations; ++iter) {
-      for (int i = 0; i < this->options.problem_sizes.size(); ++i) {
+      for (size_t i = 0; i < this->options.problem_sizes.size(); ++i) {
         cutlass::gemm::GemmCoord const & problem = this->options.problem_sizes[i];
         int32_t batch_count = 1;
         int64_t lda = this->lda_host.at(i);
@@ -1146,7 +1146,7 @@ public:
     );
 
     // Initialize the Rank2K object
-    Rank2K rank2k;
+    Rank2K rank2k{};
     size_t workspace_size = rank2k.get_workspace_size(args);
     cutlass::DeviceAllocation<uint8_t> workspace(workspace_size);
 

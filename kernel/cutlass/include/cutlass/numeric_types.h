@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,18 +32,10 @@
     \file
     \brief Top-level include for all CUTLASS numeric types.
 */
-/*
-  Note:  CUTLASS 3x increases the host compiler requirements to C++17. However, certain
-         existing integrations of CUTLASS require C++11 host compilers.
-
-         Until this requirement can be lifted, certain headers with this annotation are required
-         to be remain consistent with C++11 syntax.
-
-         C++11 compatibility is enforced by `cutlass_test_unit_core_cpp11`.
-*/
 #pragma once
 
 #include "cutlass/cutlass.h"
+#include "cutlass/platform/platform.h"
 #include "cutlass/numeric_size.h"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -66,17 +58,31 @@ struct index_sequence_helper<0, 0, Next...> {
 template <size_t N>
 using make_index_sequence = typename index_sequence_helper<N>::type;
 
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Get the register type used in kernel
+//
+/////////////////////////////////////////////////////////////////////////////////////////////////
+
+namespace detail {
+
+template<typename T>
+struct get_unpacked_element_type {
+  using type = T;
+};
+
+} // namespace detail
 
 }  // namespace cutlass
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include "cutlass/integer_subbyte.h"
-
 #include "cutlass/half.h"
 #include "cutlass/bfloat16.h"
 #include "cutlass/tfloat32.h"
 #include "cutlass/float8.h"
+#include "cutlass/uint128.h"
 /////////////////////////////////////////////////////////////////////////////////////////////////
 

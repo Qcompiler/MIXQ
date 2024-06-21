@@ -1,5 +1,5 @@
 
-# Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -27,10 +27,14 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-
+set(TEST_STANDARD --m=1024 --n=1024 --k=1024)
+set(TEST_LARGE_PERFCHECK --m=4096 --n=3456 --k=4096 --perf-check)
 
 cutlass_example_add_executable(
   23_ampere_gemm_operand_reduction_fusion
   ampere_gemm_operand_reduction_fusion.cu
+  TEST_COMMAND_OPTIONS
+  TEST_STANDARD
+  TEST_LARGE_PERFCHECK
   )
 

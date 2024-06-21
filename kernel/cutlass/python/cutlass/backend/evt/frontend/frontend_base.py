@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -36,7 +36,7 @@ Base class for Python EVT Frontend
 
 from typing import Union
 
-from cutlass import DataType
+from cutlass_library import DataType
 from cutlass.backend.evt.ir import (
     ComputeNode,
     DAGIR,
@@ -241,10 +241,10 @@ class EVTFrontendBase:
         :param name: the name of the graph
         """
         drawer = EVTGraphDrawer(self.dag_ir, name)
-        if drawer.dot_available:
+        try:
             for name, graph in drawer.get_dot_graph():
                 graph.write_svg(f"./{name}.svg")
-        else:
+        except:
             raise RuntimeError(
                 "'dot' is not found in path. GraphDrawer is disabled. "
                 "Please install it with 'sudo apt-get install graphviz'."

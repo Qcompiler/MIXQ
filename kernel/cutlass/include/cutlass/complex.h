@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -28,6 +28,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  **************************************************************************************************/
+
 #pragma once
 
 #include <cuComplex.h>
@@ -42,11 +43,9 @@
 
 #include "cutlass/cutlass.h"
 #include "cutlass/functional.h"
-#include "cutlass/half.h"
 #include "cutlass/real.h"
 
-#include "cutlass/bfloat16.h"
-#include "cutlass/tfloat32.h"
+#include "cutlass/numeric_types.h"
 
 #include "cutlass/fast_math.h"
 
@@ -55,9 +54,6 @@
 #endif
 
 namespace cutlass {
-
-
-
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 /// Enumeraed type describing a transformation on a complex value.
@@ -489,6 +485,15 @@ CUTLASS_HOST_DEVICE uint1b_t conj(uint1b_t const& z) {
 CUTLASS_HOST_DEVICE tfloat32_t conj(tfloat32_t const& z) {
   return z;
 }
+
+CUTLASS_HOST_DEVICE float_e4m3_t conj(float_e4m3_t const& z) {
+  return z;
+}
+
+CUTLASS_HOST_DEVICE float_e5m2_t conj(float_e5m2_t const& z) {
+  return z;
+}
+
 
 /// Returns the complex conjugate
 template <typename T>

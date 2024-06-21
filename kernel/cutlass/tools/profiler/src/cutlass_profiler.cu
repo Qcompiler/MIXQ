@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -42,8 +42,8 @@
 #include "cutlass/profiler/rank_2k_operation_profiler.h"
 #include "cutlass/profiler/trmm_operation_profiler.h"
 #include "cutlass/profiler/symm_operation_profiler.h"
-#include "cutlass/profiler/conv2d_operation_profiler.h"          
-#include "cutlass/profiler/conv3d_operation_profiler.h"          
+#include "cutlass/profiler/conv2d_operation_profiler.h"
+#include "cutlass/profiler/conv3d_operation_profiler.h"
 #include "cutlass/profiler/sparse_gemm_operation_profiler.h"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -55,7 +55,7 @@ namespace profiler {
 
 CutlassProfiler::CutlassProfiler(
   Options const &options
-): 
+):
   options_(options) {
 
   operation_profilers_.emplace_back(new GemmOperationProfiler(options));
@@ -145,7 +145,6 @@ int CutlassProfiler::profile_() {
 
   int result = 0;
   DeviceContext device_context;
-
   // For all profilers
   for (auto & profiler : operation_profilers_) {
 
@@ -193,8 +192,8 @@ void CutlassProfiler::print_usage_(std::ostream &out) {
     << "  $ cutlass_profiler --operation=RankK --help\n\n"
     << "  $ cutlass_profiler --operation=Trmm --help\n\n"
     << "  $ cutlass_profiler --operation=Symm --help\n\n"
-    << "  $ cutlass_profiler --operation=Conv3d --help\n\n"         
-    << "  $ cutlass_profiler --operation=Conv2d --help\n\n"         
+    << "  $ cutlass_profiler --operation=Conv3d --help\n\n"
+    << "  $ cutlass_profiler --operation=Conv2d --help\n\n"
     << "  $ cutlass_profiler --operation=SparseGemm --help\n\n"
   ;
 }

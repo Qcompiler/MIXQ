@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -46,6 +46,7 @@ namespace cutlass::epilogue {
 //////////////////////////////////////////////////////////////////////////////
 
 struct NoSmemWarpSpecialized {};
+struct PtrArrayNoSmemWarpSpecialized {};
 struct TmaWarpSpecialized {};
 struct TmaWarpSpecializedCooperative {};
 // DEPRECATED schedules, will be removed in next release
@@ -131,13 +132,15 @@ template<
   int StagesC_,
   int StagesD_,
   int FragmentSize_,
-  bool ReuseSmemC_
+  bool ReuseSmemC_,
+  bool DelayTmaStore_
 >
 struct Sm90TmaWarpSpecialized {
   constexpr static int StagesC = StagesC_;
   constexpr static int StagesD = StagesD_;
   constexpr static int FragmentSize = FragmentSize_;
   constexpr static bool ReuseSmemC = ReuseSmemC_;
+  constexpr static bool DelayTmaStore = DelayTmaStore_;
 };
 
 

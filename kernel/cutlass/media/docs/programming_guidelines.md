@@ -1,6 +1,6 @@
-![ALT](/media/images/gemm-hierarchy-with-epilogue-no-labels.png "CUTLASS Programming Guidelines")
+![ALT](../images/gemm-hierarchy-with-epilogue-no-labels.png "CUTLASS Programming Guidelines")
 
-[README](/README.md#documentation) > **Programming Guidelines**
+[README](../../README.md#documentation) > **Programming Guidelines**
 
 # Programming Guidelines
 
@@ -835,7 +835,7 @@ However, A is certainly M major if interpreted as a matrix.
 
 # Copyright
 
-Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: BSD-3-Clause
 
 ```

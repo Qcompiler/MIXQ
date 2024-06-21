@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -202,32 +202,30 @@ struct ImplicitGemmConvolutionFusion {
 
   /// Parameters structure
   struct Params {
-    ConvProblemSize problem_size;
-    cutlass::gemm::GemmCoord grid_tiled_shape;
-    gemm::GemmCoord implicit_gemm_problem_size;
-    int swizzle_log_tile;
-    int gemm_k_iterations;
-    typename Mma::IteratorA::Params iterator_A;
-    typename Mma::IteratorA::Element const *ptr_A;
-    typename Mma::IteratorB::Params iterator_B;
-    typename Mma::IteratorB::Element const *ptr_B;
-    typename Mma::IteratorScaleBias::Params iterator_scale_bias;
-    typename Mma::IteratorScaleBias::Element const *ptr_scale;
-    typename Mma::IteratorScaleBias::Element const *ptr_bias;
-    typename Epilogue::OutputTileIterator::Params iterator_C;
-    typename Epilogue::OutputTileIterator::Element *ptr_C;
-    typename Epilogue::OutputTileIterator::Params iterator_D;
-    typename Epilogue::OutputTileIterator::Element *ptr_D;
-    typename EpilogueOutputOp::Params output_op;
-    int *semaphore;
-    SplitKMode split_k_mode;
+    ConvProblemSize problem_size{};
+    cutlass::gemm::GemmCoord grid_tiled_shape{};
+    gemm::GemmCoord implicit_gemm_problem_size{};
+    int swizzle_log_tile{0};
+    int gemm_k_iterations{0};
+    typename Mma::IteratorA::Params iterator_A{};
+    typename Mma::IteratorA::Element const *ptr_A = nullptr;
+    typename Mma::IteratorB::Params iterator_B{};
+    typename Mma::IteratorB::Element const *ptr_B = nullptr;
+    typename Mma::IteratorScaleBias::Params iterator_scale_bias{};
+    typename Mma::IteratorScaleBias::Element const *ptr_scale = nullptr;
+    typename Mma::IteratorScaleBias::Element const *ptr_bias = nullptr;
+    typename Epilogue::OutputTileIterator::Params iterator_C {};
+    typename Epilogue::OutputTileIterator::Element *ptr_C = nullptr;
+    typename Epilogue::OutputTileIterator::Params iterator_D {};
+    typename Epilogue::OutputTileIterator::Element *ptr_D = nullptr;
+    typename EpilogueOutputOp::Params output_op {};
+    int *semaphore = nullptr;
+    SplitKMode split_k_mode {};
 
     //
     // Methods
     //
-
-    CUTLASS_HOST_DEVICE
-    Params(): swizzle_log_tile(0), gemm_k_iterations(0) { }
+    Params() = default;
 
     /// 
     CUTLASS_HOST_DEVICE

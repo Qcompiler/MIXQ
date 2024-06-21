@@ -1,6 +1,6 @@
-![ALT](/media/images/gemm-hierarchy-with-epilogue-no-labels.png "CUTLASS Terminology")
+![ALT](../images/gemm-hierarchy-with-epilogue-no-labels.png "CUTLASS Terminology")
 
-[README](/README.md#documentation) > **Terminology**
+[README](../../README.md#documentation) > **Terminology**
 
 # CUTLASS Terminology
 
@@ -82,7 +82,7 @@ replaced by [MMA and Copy atoms from CuTe](/media/docs/cute/0t_mma_atom.md).
 
 # Copyright
 
-Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: BSD-3-Clause
 
 ```

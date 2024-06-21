@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -68,7 +68,7 @@ template <
 struct NamedBarrierSync {
   CUTLASS_DEVICE
   static void sync() {
-    cutlass::arch::NamedBarrier::sync(ThreadCount, BarrierId);
+    cutlass::arch::NamedBarrier::sync(ThreadCount, static_cast<arch::ReservedNamedBarriers>(BarrierId));
   }
 };
 
@@ -219,15 +219,17 @@ using Barrier = GenericBarrier<detail::SyncthreadsSync>;
  *
  * @param ThreadCount_ Number of threads that will wait on a NamedBarrier with a given ID
  * @param Offset Value added to the ID passed in by the user to determine the NamedBarrier ID to call into
+ * @param MaxNumNamedBarriers The maximum number of unique barrier IDs that will be requested on this type
 **/
 template <
   uint32_t ThreadCount_,
-  uint32_t Offset = 0
+  uint32_t Offset = 0,
+  uint32_t MaxNumNamedBarriers = 16
 >
 struct NamedBarrierManager {
-  static constexpr uint32_t MaxNumNamedBarriers = 16;
-  static_assert(Offset < MaxNumNamedBarriers, "Barrier IDs cannot exceed 15");
-  static constexpr uint32_t ValidBarrierIds = MaxNumNamedBarriers - Offset;
+
+  static_assert(MaxNumNamedBarriers <= arch::NamedBarrier::HardwareMaxNumNamedBarriers);
+  static_assert(MaxNumNamedBarriers + Offset <= arch::NamedBarrier::HardwareMaxNumNamedBarriers, "Barrier IDs cannot exceed 15");
 
   // Number of threads participating in the barrier
   static constexpr uint32_t ThreadCount = ThreadCount_;
@@ -239,7 +241,7 @@ struct NamedBarrierManager {
   // template parameter BarrierId, so passing in 0 suffices.
   using T = typename BarrierSync<0>::T;
 
-  using IntegerSequence = cute::make_integer_sequence<uint32_t, ValidBarrierIds>;
+  using IntegerSequence = cute::make_integer_sequence<uint32_t, MaxNumNamedBarriers>;
 
   CUTLASS_DEVICE
   static
@@ -274,10 +276,8 @@ struct NamedBarrierManager {
 private:
   CUTLASS_DEVICE
   static void
-  check_barrier_in_range(uint32_t idx) {
-    if (idx >= ValidBarrierIds) {
-      CUTE_RUNTIME_ASSERT("Index exceeds barrier count");
-    }
+  check_barrier_in_range([[maybe_unused]] uint32_t idx) {
+    assert((idx >= MaxNumNamedBarriers) && "Index exceeds barrier count");
   }
 
   template <uint32_t... Idx>

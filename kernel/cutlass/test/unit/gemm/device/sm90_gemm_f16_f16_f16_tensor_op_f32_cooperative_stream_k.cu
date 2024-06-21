@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -95,7 +95,8 @@ TEST(SM90_Device_Gemm_f16t_f16t_f32n_tensor_op_gmma_f32_cooperative_stream_k, 12
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 TEST(SM90_Device_Gemm_f16t_f16t_f32n_tensor_op_gmma_f32_cooperative_stream_k, 256x128x64_1x2x1) {
@@ -136,7 +137,8 @@ TEST(SM90_Device_Gemm_f16t_f16t_f32n_tensor_op_gmma_f32_cooperative_stream_k, 25
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -178,7 +180,8 @@ TEST(SM90_Device_Gemm_f16t_f16t_f32n_tensor_op_gmma_f32_cooperative_stream_k, 12
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -218,7 +221,8 @@ TEST(SM90_Device_Gemm_f16t_f16n_f32n_tensor_op_gmma_f32_cooperative_stream_k, 25
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -258,7 +262,8 @@ TEST(SM90_Device_Gemm_f16n_f16t_f32n_tensor_op_gmma_f32_cooperative_stream_k, 12
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -298,7 +303,8 @@ TEST(SM90_Device_Gemm_f16n_f16n_f32n_tensor_op_gmma_f32_cooperative_stream_k, 25
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -341,7 +347,8 @@ TEST(SM90_Device_Gemm_f16t_f16t_f32n_tensor_op_gmma_f32_cooperative_stream_k, 12
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -381,7 +388,8 @@ TEST(SM90_Device_Gemm_f16t_f16n_f32n_tensor_op_gmma_f32_cooperative_stream_k, 12
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -421,7 +429,8 @@ TEST(SM90_Device_Gemm_f16n_f16t_f32n_tensor_op_gmma_f32_cooperative_stream_k, 12
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -461,7 +470,8 @@ TEST(SM90_Device_Gemm_f16n_f16n_f32n_tensor_op_gmma_f32_cooperative_stream_k, 12
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 
@@ -505,7 +515,8 @@ TEST(SM90_Device_Gemm_f16t_f16t_f32n_tensor_op_gmma_f32_cooperative_stream_k, 12
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -545,7 +556,8 @@ TEST(SM90_Device_Gemm_f16t_f16n_f32n_tensor_op_gmma_f32_cooperative_stream_k, 12
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -585,7 +597,8 @@ TEST(SM90_Device_Gemm_f16n_f16t_f32n_tensor_op_gmma_f32_cooperative_stream_k, 12
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -625,7 +638,8 @@ TEST(SM90_Device_Gemm_f16n_f16n_f32n_tensor_op_gmma_f32_cooperative_stream_k, 12
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 
@@ -669,7 +683,8 @@ TEST(SM90_Device_Gemm_f16t_f16t_f32n_tensor_op_gmma_f32_cooperative_stream_k, 25
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -709,7 +724,8 @@ TEST(SM90_Device_Gemm_f16t_f16n_f32n_tensor_op_gmma_f32_cooperative_stream_k, 25
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -749,7 +765,8 @@ TEST(SM90_Device_Gemm_f16n_f16t_f32n_tensor_op_gmma_f32_cooperative_stream_k, 25
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -789,7 +806,8 @@ TEST(SM90_Device_Gemm_f16n_f16n_f32n_tensor_op_gmma_f32_cooperative_stream_k, 25
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 TEST(SM90_Device_Gemm_f16t_f16n_f16n_tensor_op_gmma_f32_cooperative_stream_k_epilogue, 256x128x64_2x2x1) {
@@ -815,7 +833,7 @@ TEST(SM90_Device_Gemm_f16t_f16n_f16n_tensor_op_gmma_f32_cooperative_stream_k_epi
       cutlass::half_t, LayoutB, 8,
       float,
       TileShape_MNK, ClusterShape_MNK,
-      cutlass::gemm::collective::StageCountAutoCarveout<sizeof(typename CollectiveEpilogue::SharedStorage)>,
+      cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(sizeof(typename CollectiveEpilogue::SharedStorage))>,
       cutlass::gemm::KernelTmaWarpSpecializedCooperative
     >::CollectiveOp;
 
@@ -827,7 +845,8 @@ TEST(SM90_Device_Gemm_f16t_f16n_f16n_tensor_op_gmma_f32_cooperative_stream_k_epi
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 TEST(SM90_Device_Gemm_f16t_f16n_f16t_tensor_op_gmma_f32_cooperative_stream_k_epilogue, 256x128x64_2x2x1) {
@@ -853,7 +872,7 @@ TEST(SM90_Device_Gemm_f16t_f16n_f16t_tensor_op_gmma_f32_cooperative_stream_k_epi
       cutlass::half_t, LayoutB, 8,
       float,
       TileShape_MNK, ClusterShape_MNK,
-      cutlass::gemm::collective::StageCountAutoCarveout<sizeof(typename CollectiveEpilogue::SharedStorage)>,
+      cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(sizeof(typename CollectiveEpilogue::SharedStorage))>,
       cutlass::gemm::KernelTmaWarpSpecializedCooperative
     >::CollectiveOp;
 
@@ -865,7 +884,8 @@ TEST(SM90_Device_Gemm_f16t_f16n_f16t_tensor_op_gmma_f32_cooperative_stream_k_epi
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 TEST(SM90_Device_Gemm_f16t_f16n_f32n_tensor_op_gmma_f32_cooperative_stream_k_epilogue, 128x128x64_2x2x1) {
@@ -891,7 +911,7 @@ TEST(SM90_Device_Gemm_f16t_f16n_f32n_tensor_op_gmma_f32_cooperative_stream_k_epi
       cutlass::half_t, LayoutB, 8,
       float,
       TileShape_MNK, ClusterShape_MNK,
-      cutlass::gemm::collective::StageCountAutoCarveout<sizeof(typename CollectiveEpilogue::SharedStorage)>,
+      cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(sizeof(typename CollectiveEpilogue::SharedStorage))>,
       cutlass::gemm::KernelTmaWarpSpecializedCooperative
     >::CollectiveOp;
 
@@ -903,7 +923,8 @@ TEST(SM90_Device_Gemm_f16t_f16n_f32n_tensor_op_gmma_f32_cooperative_stream_k_epi
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 TEST(SM90_Device_Gemm_f16t_f16n_f32t_tensor_op_gmma_f32_cooperative_stream_k_epilogue, 128x128x64_2x2x1) {
@@ -929,7 +950,7 @@ TEST(SM90_Device_Gemm_f16t_f16n_f32t_tensor_op_gmma_f32_cooperative_stream_k_epi
       cutlass::half_t, LayoutB, 8,
       float,
       TileShape_MNK, ClusterShape_MNK,
-      cutlass::gemm::collective::StageCountAutoCarveout<sizeof(typename CollectiveEpilogue::SharedStorage)>,
+      cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(sizeof(typename CollectiveEpilogue::SharedStorage))>,
       cutlass::gemm::KernelTmaWarpSpecializedCooperative
     >::CollectiveOp;
 
@@ -941,7 +962,8 @@ TEST(SM90_Device_Gemm_f16t_f16n_f32t_tensor_op_gmma_f32_cooperative_stream_k_epi
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>());
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAll<Gemm>(1.0, 1.0));
 }
 
 TEST(SM90_Device_Gemm_f16t_f16n_f32t_tensor_op_gmma_f32_cooperative_stream_k_epilogue, 256x128x64_2x2x1_BiasF32_ReLU) {
@@ -972,7 +994,7 @@ TEST(SM90_Device_Gemm_f16t_f16n_f32t_tensor_op_gmma_f32_cooperative_stream_k_epi
       cutlass::half_t, LayoutB, 8,
       float,
       TileShape_MNK, ClusterShape_MNK,
-      cutlass::gemm::collective::StageCountAutoCarveout<sizeof(typename CollectiveEpilogue::SharedStorage)>,
+      cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(sizeof(typename CollectiveEpilogue::SharedStorage))>,
       cutlass::gemm::KernelTmaWarpSpecializedCooperative
     >::CollectiveOp;
 
@@ -985,8 +1007,8 @@ TEST(SM90_Device_Gemm_f16t_f16n_f32t_tensor_op_gmma_f32_cooperative_stream_k_epi
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
 
-  bool passed = test::gemm::device::TestAllBiasElementwise<Gemm>();
-  EXPECT_TRUE(passed);
+  EXPECT_TRUE(test::gemm::device::TestAllBiasElementwise<Gemm>(1.0, 0.0));
+  EXPECT_TRUE(test::gemm::device::TestAllBiasElementwise<Gemm>(1.0, 1.0));
 }
 
 #endif // defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)

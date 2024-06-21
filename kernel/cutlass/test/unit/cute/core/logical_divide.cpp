@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -45,10 +45,10 @@ test_logical_divide(LayoutA const& layoutA,
   auto layoutR = logical_divide(layoutA, layoutB);
 
   CUTLASS_TRACE_HOST("test_logical_divide()");
-  CUTLASS_TRACE_HOST(shape(layoutA)  << " / " << shape(layoutB)  << "  =>  " << shape(layoutR) );
+  CUTLASS_TRACE_HOST( shape(layoutA) << " / " <<  shape(layoutB) << "  =>  " <<  shape(layoutR));
   CUTLASS_TRACE_HOST(stride(layoutA) << "   " << stride(layoutB) << "  =>  " << stride(layoutR));
 
-  // Test that layout R is compatible with layout B
+  // Test that layout B is compatible with layout R_0
   ASSERT_EQ(rank(layoutR), 2);
   ASSERT_TRUE(compatible(layoutB, layout<0>(layoutR)));
 }
@@ -186,10 +186,10 @@ TEST(CuTe_core, Logical_divide)
 
   // Enforcement for dynamic cases
   auto result = logical_divide(layout, tile);
-  static_assert(decltype(shape<0>(result) == Int<32>{})::value);
-  static_assert(decltype(stride<0>(result) == Int<1>{})::value);
-  assert(shape<1>(result) == 1);
-  static_assert(decltype(stride<1>(result) == Int<32>{})::value);
+  ASSERT_TRUE(decltype(shape<0>(result) == Int<32>{})::value);
+  ASSERT_TRUE(decltype(stride<0>(result) == Int<1>{})::value);
+  ASSERT_TRUE(shape<1>(result) == 1);
+  ASSERT_TRUE(decltype(stride<1>(result) == Int<32>{})::value);
   }
 
   {
@@ -200,10 +200,10 @@ TEST(CuTe_core, Logical_divide)
 
   // Enforcement for dynamic cases
   auto result = logical_divide(layout, tile);
-  static_assert(decltype(shape<0>(result) == Int<32>{})::value);
-  static_assert(decltype(stride<0>(result) == Int<1>{})::value);
-  assert(shape<1>(result) == 2);
-  static_assert(decltype(stride<1>(result) == Int<32>{})::value);
+  ASSERT_TRUE(decltype(shape<0>(result) == Int<32>{})::value);
+  ASSERT_TRUE(decltype(stride<0>(result) == Int<1>{})::value);
+  ASSERT_TRUE(shape<1>(result) == 2);
+  ASSERT_TRUE(decltype(stride<1>(result) == Int<32>{})::value);
   }
 
   {
@@ -221,33 +221,48 @@ TEST(CuTe_core, Logical_divide)
 
   // Enforcement for dynamic cases
   auto result = logical_divide(layout, tile);
-  static_assert(decltype(shape<0>(result) == Int<48>{})::value);
-  static_assert(decltype(stride<0>(result) == Int<1>{})::value);
-  assert(shape<1>(result) == 1);
-  static_assert(decltype(stride<1>(result) == Int<48>{})::value);
+  ASSERT_TRUE(decltype(shape<0>(result) == Int<48>{})::value);
+  ASSERT_TRUE(decltype(stride<0>(result) == Int<1>{})::value);
+  ASSERT_TRUE(shape<1>(result) == 1);
+  ASSERT_TRUE(decltype(stride<1>(result) == Int<48>{})::value);
   }
 
-  // DISALLOWED
-  //{
-  //auto layout = make_layout(make_shape(128,4,3), make_stride(1,512,0));
-  //auto tile   = Layout<_32>{};
+  {
+  auto layout = make_layout(make_shape(Int<32>{}, Int<4>{}, 4));
+  auto tile   = Layout<_64>{};
 
-  //test_logical_divide(layout, tile);
-  //}
+  test_logical_divide(layout, tile);
 
-  //{
-  //auto layout = make_layout(make_shape(128,4,3), make_stride(1,512,0));
-  //auto tile   = Layout<_32,_2>{};
+  // Enforcement of result
+  auto result = logical_divide(layout, tile);
+  ASSERT_TRUE(bool( shape(result) == make_shape (_64{}, make_shape ( _2{},     4))));
+  ASSERT_TRUE(bool(stride(result) == make_stride( _1{}, make_stride(_64{},_128{}))));
+  }
 
-  //CUTLASS_TRACE_HOST("complement: " << complement(tile, size(layout)));
-  //test_logical_divide(layout, tile);
-  //}
 
-  //{
-  //auto layout = make_layout(make_shape(16,4,3), make_stride(1,512,0));
-  //auto tile   = Layout<_32>{};
+  //
+  // ALLOWED, but dangerous due to the dynamic lhs shapes
+  //   Consider disallowing...
+  //
 
-  //CUTLASS_TRACE_HOST("complement: " << complement(tile, size(layout)));
-  //test_logical_divide(layout, tile);
-  //}
+  {
+  auto layout = make_layout(make_shape(128,4,3), make_stride(1,512,0));
+  auto tile   = Layout<_32>{};
+
+  test_logical_divide(layout, tile);
+  }
+
+  {
+  auto layout = make_layout(make_shape(128,4,3), make_stride(1,512,0));
+  auto tile   = Layout<_32,_2>{};
+
+  test_logical_divide(layout, tile);
+  }
+
+  {
+  auto layout = make_layout(make_shape(16,4,3), make_stride(1,512,0));
+  auto tile   = Layout<_32>{};
+
+  test_logical_divide(layout, tile);
+  }
 }

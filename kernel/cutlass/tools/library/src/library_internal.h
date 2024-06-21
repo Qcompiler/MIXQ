@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -152,6 +152,7 @@ template <> struct NumericTypeMap<cutlass::tfloat32_t> {
   static NumericTypeID const kId = NumericTypeID::kTF32;
 };
 
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <typename T> struct MathOperationMap {
@@ -285,6 +286,10 @@ template <> struct OpcodeClassMap<arch::OpClassSimt> {
 
 template <> struct OpcodeClassMap<arch::OpClassTensorOp> {
   static OpcodeClassID const kId = OpcodeClassID::kTensorOp;
+};
+
+template <> struct OpcodeClassMap<arch::OpClassSparseTensorOp> {
+  static OpcodeClassID const kId = OpcodeClassID::kSparseTensorOp;
 };
 
 template <> struct OpcodeClassMap<arch::OpClassWmmaTensorOp> {

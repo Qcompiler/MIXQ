@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -38,8 +38,9 @@ import ast
 import inspect
 import textwrap
 
+from cutlass_library import DataType
+
 import cutlass
-from cutlass import DataType
 from cutlass.backend.evt.frontend.frontend_base import EVTFrontendBase
 from cutlass.backend.epilogue import relu
 from cutlass.backend.library import FunctionalOp

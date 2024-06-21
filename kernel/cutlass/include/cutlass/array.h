@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,25 +33,10 @@
            and is safe to use in a union.
 */
 
-/*
-  Note:  CUTLASS 3x increases the host compiler requirements to C++17. However, certain
-         existing integrations of CUTLASS require C++11 host compilers.
-
-         Until this requirement can be lifted, certain headers with this annotation are required
-         to be remain consistent with C++11 syntax.
-
-         C++11 compatibility is enforced by `cutlass_test_unit_core_cpp11`.
-*/
-
 #pragma once
 #include "cutlass/cutlass.h"
 #include "cutlass/functional.h"
-#include "cutlass/numeric_size.h"
-#include "cutlass/half.h"
-#include "cutlass/integer_subbyte.h"
-#include "cutlass/tfloat32.h"
-#include "cutlass/bfloat16.h"
-#include "cutlass/half.h"
+#include "cutlass/numeric_types.h"
 namespace cutlass {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -62,15 +47,14 @@ template <
   int N,
   bool RegisterSized = sizeof_bits<T>::value >= 32
 >
-class Array;
+struct Array;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// Defines the size of an Array<> in bits
 template <typename T, int N, bool RegisterSized>
 struct sizeof_bits<Array<T, N, RegisterSized> > {
-  static int const value =
-    int(sizeof(typename Array<T, N, RegisterSized>::Storage)) * 8 * int(Array<T, N, RegisterSized>::kStorageElements);
+  static constexpr int value = sizeof(Array<T, N, RegisterSized>) * 8;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -96,8 +80,7 @@ template <
   typename T,
   int N
 >
-class Array<T, N, true> {
-public:
+struct Array<T, N, true> {
 
   /// Storage type
   using Storage = T;
@@ -107,10 +90,10 @@ public:
 
   /// Number of storage elements
   //static std::size_t const kStorageElements = N;
-  static size_t const kStorageElements = N;
+  static constexpr size_t kStorageElements = N;
 
   /// Number of logical elements
-  static size_t const kElements = N;
+  static constexpr size_t kElements = N;
 
   //
   // C++ standard members
@@ -352,25 +335,8 @@ public:
     }
   };
 
-private:
-
   /// Internal storage
   Storage storage[kElements];
-
-public:
-
-  #if 0
-  CUTLASS_HOST_DEVICE
-  Array() { }
-
-  CUTLASS_HOST_DEVICE
-  Array(Array const &x) {
-    CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < kElements; ++i) {
-      storage[i] = x.storage[i];
-    }
-  }
-  #endif
 
   /// Efficient clear method
   CUTLASS_HOST_DEVICE
@@ -457,7 +423,7 @@ public:
   CUTLASS_HOST_DEVICE
   void fill(T const &value) {
     CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < kElements; ++i) {
+    for (int i = 0; i < int(kElements); ++i) {
       storage[i] = static_cast<Storage>(value);
     }
   }
@@ -536,39 +502,25 @@ public:
 template <typename Element>
 CUTLASS_HOST_DEVICE
 Array<Element, 1> make_Array(Element x) {
-  Array<Element, 1> m;
-  m[0] = x;
-  return m;
+  return {x};
 }
 
 template <typename Element>
 CUTLASS_HOST_DEVICE
 Array<Element, 2> make_Array(Element x, Element y) {
-  Array<Element, 2> m;
-  m[0] = x;
-  m[1] = y;
-  return m;
+  return {x,y};
 }
 
 template <typename Element>
 CUTLASS_HOST_DEVICE
 Array<Element, 3> make_Array(Element x, Element y, Element z) {
-  Array<Element, 3> m;
-  m[0] = x;
-  m[1] = y;
-  m[2] = z;
-  return m;
+  return {x,y,z};
 }
 
 template <typename Element>
 CUTLASS_HOST_DEVICE
 Array<Element, 4> make_Array(Element x, Element y, Element z, Element w) {
-  Array<Element, 4> m;
-  m[0] = x;
-  m[1] = y;
-  m[2] = z;
-  m[3] = w;
-  return m;
+  return {x,y,z,w};
 }
 
 
@@ -730,6 +682,24 @@ struct multiplies<Array<T, N>> {
   }
 };
 
+template <typename T, int N, bool PropogateNaN>
+struct maximum_absolute_value_reduction<Array<T, N>, PropogateNaN> {
+
+  CUTLASS_HOST_DEVICE
+  T operator() (T const& scalar, Array<T, N> const& rhs) const {
+
+    T result = scalar;
+    maximum_absolute_value_reduction<T, PropogateNaN> scalar_op;
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < N; ++i) {
+      result = scalar_op(result, rhs[i]);
+    }
+
+    return result;
+  }
+};
+
 template <typename T, int N>
 struct scale<Array<T, N>> {
   T const scaling_factor_;
@@ -791,6 +761,24 @@ struct divides<Array<T, N>> {
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < N; ++i) {
       result[i] = scalar_op(scalar, rhs[i]);
+    }
+
+    return result;
+  }
+};
+
+template <typename T, int N>
+struct reciprocal_approximate<Array<T, N>> {
+  
+  CUTLASS_HOST_DEVICE
+  Array<T, N> operator()(Array<T, N> const &lhs) const {
+
+    Array<T, N> result;
+    reciprocal_approximate<T> scalar_op;
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < N; ++i) {
+      result[i] = scalar_op(lhs[i]);
     }
 
     return result;
@@ -1051,6 +1039,76 @@ struct multiply_add<Array<T, N>, Array<T, N>, Array<T, N>> {
     for (int i = 0; i < N; ++i) {
       result[i] = scalar_op(scalar, b[i], c[i]);
     }
+
+    return result;
+  }
+};
+
+/// Fused square-and-plus
+template <typename T, int N>
+struct square_and_plus<Array<T, N>> {
+
+  CUTLASS_HOST_DEVICE
+  Array<T, N> operator()(Array<T, N> const &lhs, Array<T, N> const &rhs) const {
+    multiply_add<Array<T, N>, Array<T, N>, Array<T, N>> ma_op;
+    return ma_op(rhs, rhs, lhs);
+  }
+
+  CUTLASS_HOST_DEVICE
+  Array<T, N> operator()(Array<T, N> const &lhs, T const &rhs) const {
+    plus<Array<T, N>> plus_op;
+    multiplies<T> multiplies_op;
+    return plus_op(multiplies_op(rhs, rhs), lhs);
+  }
+};
+
+/// Inverse-square-root
+template <typename T, int N>
+struct inverse_square_root<Array<T, N>> {
+  CUTLASS_HOST_DEVICE
+  Array<T, N> operator()(Array<T, N> const &a) const {
+    Array<T, N> result;
+    inverse_square_root<T> scalar_op;
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < N; ++i) {
+      result[i] = scalar_op(a[i]);
+    }
+    return result;
+  }
+};
+
+template <int N>
+struct inverse_square_root<Array<half_t, N>> {
+  CUTLASS_HOST_DEVICE
+  Array<half_t, N> operator()(Array<half_t, N> const & a) const {
+    Array<half_t, N> result;
+    #if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 530)
+
+    __half2 *result_ptr = reinterpret_cast<__half2 *>(&result);
+    __half2 const *a_ptr = reinterpret_cast<__half2 const *>(&a);
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < N / 2; ++i) {
+      result_ptr[i] = h2rsqrt(a_ptr[i]);
+    }
+
+    if constexpr (N % 2) {
+      __half const *a_residual_ptr = reinterpret_cast<__half const *>(&a);
+      __half d_residual = hrsqrt(a_residual_ptr[N - 1]);
+      result[N - 1] = reinterpret_cast<half_t const &>(d_residual);
+    }
+
+    #else
+
+    inverse_square_root<half_t> scalar_op;
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < N; ++i) {
+      result[i] = scalar_op(a[i]);
+    }
+
+    #endif
 
     return result;
   }
@@ -2465,7 +2523,6 @@ struct bit_xor<Array<uint1b_t, N>> {
   }
 };
 
-
 /////////////////////////////////////////////////////////////////////////////////////////////////
 // Operator overloads
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2473,6 +2530,20 @@ struct bit_xor<Array<uint1b_t, N>> {
 template <typename T, int N>
 CUTLASS_HOST_DEVICE
 Array<T, N> operator+(Array<T, N> const &lhs, Array<T, N> const &rhs) {
+  plus<Array<T, N>> op;
+  return op(lhs, rhs);
+}
+
+template <typename T, int N>
+CUTLASS_HOST_DEVICE
+Array<T, N> operator+(T const &lhs, Array<T, N> const &rhs) {
+  plus<Array<T, N>> op;
+  return op(lhs, rhs);
+}
+
+template <typename T, int N>
+CUTLASS_HOST_DEVICE
+Array<T, N> operator+(Array<T, N> const &lhs, T const &rhs) {
   plus<Array<T, N>> op;
   return op(lhs, rhs);
 }
@@ -2573,7 +2644,7 @@ template <
   /// Number of elements in the array
   int N,
   /// Alignment requirement in bytes
-  int Alignment = sizeof_bits<T>::value * N / 8
+  int Alignment = ( sizeof_bits<T>::value * N + 7 ) / 8
 >
 class alignas(Alignment) AlignedArray: public Array<T, N> {
 public:

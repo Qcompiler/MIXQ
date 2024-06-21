@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,8 +32,10 @@
 
 #include "cutlass/layout/matrix.h"
 #include "cutlass/layout/tensor.h"
+#include "cutlass/numeric_types.h"
 
 #include "cute/layout.hpp"
+#include "cute/util/type_traits.hpp"
 #include "cute/arch/copy_sm90_tma.hpp"
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -80,9 +82,97 @@ struct TagToStrideB<layout::ColumnMajor> {
   using tag = layout::ColumnMajor;
 };
 
+// For each cutlass::layout *, provides its corresponding cute stride types, 64b by default
+// Used by pointer array and grouped gemm
+// Maps to modes [M, K, L]
+template <>
+struct TagToStrideA<layout::RowMajor *> {
+  using UnderlyingType = cute::Stride<int64_t, cute::Int<1>, cute::Int<0>>;
+  using type = UnderlyingType*;
+  using tag = layout::RowMajor;
+};
+
+// Maps to modes [M, K, L]
+template <>
+struct TagToStrideA<layout::ColumnMajor *> {
+  using UnderlyingType = cute::Stride<cute::Int<1>, int64_t, cute::Int<0>>;
+  using type = UnderlyingType*;
+  using tag = layout::ColumnMajor;
+};
+
+// Maps to modes [N, K, L]
+template <>
+struct TagToStrideB<layout::RowMajor *> {
+  using UnderlyingType = cute::Stride<cute::Int<1>, int64_t, cute::Int<0>>;
+  using type = UnderlyingType*;
+  using tag = layout::RowMajor;
+};
+
+// Maps to modes [N, K, L]
+template <>
+struct TagToStrideB<layout::ColumnMajor *> {
+  using UnderlyingType = cute::Stride<int64_t, cute::Int<1>, cute::Int<0>>;
+  using type = UnderlyingType*;
+  using tag = layout::ColumnMajor;
+};
+
 // Maps to modes [M, N, L]
 template <class LayoutTag>
 struct TagToStrideC : TagToStrideA<LayoutTag> { };
+
+// Conv: Maps to modes ((P,N), C, _0) for compatiblity with GEMM epilogues expecting a batch mode stride
+template <>
+struct TagToStrideC<cutlass::layout::TensorNWC> {
+  using type = cute::Stride<cute::Stride<int64_t, int64_t>, cute::Int<1>, cute::Int<0>>;
+};
+
+// Conv: Maps to modes (PN, C, _0) for compatiblity with GEMM epilogues expecting a batch mode stride
+template <>
+struct TagToStrideC<cutlass::layout::TensorLinearizedNWC> {
+  using type = cute::Stride<int64_t, cute::Int<1>, cute::Int<0>>;
+};
+
+// Conv: Maps to modes ((P,Q,N), C, _0) for compatiblity with GEMM epilogues expecting a batch mode stride
+template <>
+struct TagToStrideC<cutlass::layout::TensorNHWC> {
+  using type = cute::Stride<cute::Stride<int64_t, int64_t, int64_t>, cute::Int<1>, cute::Int<0>>;
+};
+
+// Conv: Maps to modes (PQN, C, _0) for compatiblity with GEMM epilogues expecting a batch mode stride
+template <>
+struct TagToStrideC<cutlass::layout::TensorLinearizedNHWC> {
+  using type = cute::Stride<int64_t, cute::Int<1>, cute::Int<0>>;
+};
+
+// Conv: Maps to modes ((P,Q,Z,N), C, _0) for compatiblity with GEMM epilogues expecting a batch mode stride
+template <>
+struct TagToStrideC<cutlass::layout::TensorNDHWC> {
+  using type = cute::Stride<cute::Stride<int64_t, int64_t, int64_t, int64_t>, cute::Int<1>, cute::Int<0>>;
+};
+
+// Conv: Maps to modes (PQZN, C, _0) for compatiblity with GEMM epilogues expecting a batch mode stride
+template <>
+struct TagToStrideC<cutlass::layout::TensorLinearizedNDHWC> {
+  using type = cute::Stride<int64_t, cute::Int<1>, cute::Int<0>>;
+};
+
+// Conv: Maps to modes (K, (C,S), _0) for compatiblity with GEMM epilogues expecting a batch mode stride
+template <>
+struct TagToStrideC<cutlass::layout::TensorKCS> {
+  using type = cute::Stride<int64_t, cute::Stride<cute::Int<1>, int64_t>, cute::Int<0>>;
+};
+
+// Conv: Maps to modes (K, (C,S,R), _0) for compatiblity with GEMM epilogues expecting a batch mode stride
+template <>
+struct TagToStrideC<cutlass::layout::TensorKCSR> {
+  using type = cute::Stride<int64_t, cute::Stride<cute::Int<1>, int64_t, int64_t>, cute::Int<0>>;
+};
+
+// Conv: Maps to modes (K, (C,S,R,T), _0) for compatiblity with GEMM epilogues expecting a batch mode stride
+template <>
+struct TagToStrideC<cutlass::layout::TensorKCSRT> {
+  using type = cute::Stride<int64_t, cute::Stride<cute::Int<1>, int64_t, int64_t, int64_t>, cute::Int<0>>;
+};
 
 // Convenience aliases
 template<class LayoutTag>
@@ -101,7 +191,7 @@ template<int ModeIndex, class Stride>
 constexpr bool
 is_major(Stride = {}) {
   // Account for stride types with and without batch mode and batch modes with static zero stride
-  return cute::is_constant<1, decltype(cute::front(cute::get<ModeIndex>(Stride{})))>::value;
+  return cute::is_constant<1, decltype(cute::front(cute::get<ModeIndex>(cute::remove_pointer_t<Stride>{})))>::value;
 }
 
 // Note : This method can be used for deducing the Layout Tag of A, C, D Matrices
@@ -182,11 +272,12 @@ constexpr bool is_tma_copy_engine() {
     return false;
   }
   else {
-   if constexpr (   cute::is_base_of_v<cute::SM90_TMA_LOAD,                  GmemTiledCopy>
-                  || cute::is_base_of_v<cute::SM90_TMA_LOAD_MULTICAST,        GmemTiledCopy>
-                  || cute::is_base_of_v<cute::SM90_TMA_LOAD_IM2COL,           GmemTiledCopy>
-                  || cute::is_base_of_v<cute::SM90_TMA_LOAD_IM2COL_MULTICAST, GmemTiledCopy>
-                  || cute::is_base_of_v<cute::SM90_TMA_STORE,                 GmemTiledCopy>
+   if constexpr (   cute::is_base_of_v<cute::SM90_TMA_LOAD,                         GmemTiledCopy>
+                  || cute::is_base_of_v<cute::SM90_TMA_LOAD_MULTICAST,              GmemTiledCopy>
+                  || cute::is_base_of_v<cute::SM90_TMA_LOAD_IM2COL,                 GmemTiledCopy>
+                  || cute::is_base_of_v<cute::SM90_TMA_LOAD_IM2COL_MULTICAST,       GmemTiledCopy>
+                  || cute::is_base_of_v<cute::SM90_TMA_STORE,                       GmemTiledCopy>
+                  || cute::is_base_of_v<cute::SM90_TMA_STORE_IM2COL,                GmemTiledCopy>
                   ) {
       return true;
     }
@@ -194,10 +285,18 @@ constexpr bool is_tma_copy_engine() {
   return false;
 }
 
+template <class X, class = void>
+struct RawDtype { using type = X; };
+
+template <class X>
+struct RawDtype<X,cute::void_t<typename X::raw_type>> { using type = typename X::raw_type; };
+
+
 // Inspects a TiledCopy and returns its alignment in terms of element count
-template <class GmemTiledCopy, class Element>
+template <class GmemTiledCopy, class Element, class ElementMma = Element>
 constexpr int
 get_alignment_count_from_gmem_tiled_copy() {
+
   if constexpr (cute::is_void_v<GmemTiledCopy>) {
     return 1;
   }

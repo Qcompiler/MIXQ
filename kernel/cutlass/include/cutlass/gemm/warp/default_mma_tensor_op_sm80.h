@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -272,8 +272,8 @@ struct DefaultMmaTensorOp<
                                                     ElementA, ElementB>::type;
 
   // Operand datatypes in the internal MMA instruction - use the wider of the two data types
-  using MmaElementA = ElementOperand;
-  using MmaElementB = ElementOperand;
+  using ElementAMma = ElementOperand;
+  using ElementBMma = ElementOperand;
   using MmaElementC = ElementC;
 
   // Uses 
@@ -281,8 +281,8 @@ struct DefaultMmaTensorOp<
       cutlass::arch::Mma<
         GemmShape<16, 8, 16>, 
         32, 
-        MmaElementA, cutlass::layout::RowMajor, 
-        MmaElementB, cutlass::layout::ColumnMajor,
+        ElementAMma, cutlass::layout::RowMajor, 
+        ElementBMma, cutlass::layout::ColumnMajor,
         MmaElementC, cutlass::layout::RowMajor, 
         arch::OpMultiplyAdd
       >,
@@ -293,6 +293,8 @@ struct DefaultMmaTensorOp<
       WarpShape_, ElementA, LayoutA, ElementB, LayoutB, ElementC, LayoutC,
       Policy, PartitionsK, AccumulatorsInRowMajor>;
 };
+
+/////////////////////////////////////////////////////////////////////////////////////////////////
 
 } // namespace warp
 } // namespace gemm

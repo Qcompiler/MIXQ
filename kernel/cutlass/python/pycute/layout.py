@@ -1,6 +1,6 @@
 #################################################################################################
 #
-# Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -101,7 +101,7 @@ class Layout(LayoutBase):
 
   # cosize(layout)   Size of the codomain
   def cosize(self):
-    return tuple_max(tuple((1, elem_scale(self.shape, self.stride))))
+    return self(self.size() - 1) + 1
 
   # print and str
   def __str__(self):

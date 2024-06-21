@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -109,7 +109,7 @@ struct GemmFunctionalKey {
 
   inline
   bool operator==(GemmFunctionalKey const &rhs) const {
-    return 
+    return
       (provider == rhs.provider) &&
       (gemm_kind == rhs.gemm_kind) &&
       (element_compute == rhs.element_compute) &&
@@ -165,7 +165,7 @@ struct GemmFunctionalKeyHasher {
 
   inline
   static size_t rotl(size_t key, int shl) {
-    return (key << shl) | (key >> (sizeof(key)*8 - shl));
+    return (key << shl) | (key >> (sizeof(key)*8u - static_cast<size_t>(shl)));
   }
 
   inline
@@ -173,8 +173,8 @@ struct GemmFunctionalKeyHasher {
     IntHash hash;
 
     return
-      rotl(hash(int(key.provider)),        1) ^ 
-      rotl(hash(int(key.gemm_kind)),       2) ^ 
+      rotl(hash(int(key.provider)),        1) ^
+      rotl(hash(int(key.gemm_kind)),       2) ^
       rotl(hash(int(key.element_compute)), 3) ^
       rotl(hash(int(key.element_scalar)),  4) ^
       rotl(hash(int(key.element_A)),       5) ^
@@ -207,7 +207,7 @@ struct GemmPreferenceKey {
   GemmPreferenceKey(int cc, int alignment): compute_capability(cc), alignment(alignment) { }
 
   bool operator<(GemmPreferenceKey const &rhs) const {
-    return (compute_capability < rhs.compute_capability) || 
+    return (compute_capability < rhs.compute_capability) ||
       ((compute_capability == rhs.compute_capability) && (alignment < rhs.alignment));
   }
 
@@ -215,18 +215,18 @@ struct GemmPreferenceKey {
     return compute_capability == rhs.compute_capability;
   }
 };
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
+
 inline
 std::ostream& operator<< (std::ostream& out, const cutlass::library::GemmPreferenceKey& key) {
     out << "{\n"
       << "compute_capability : " << key.compute_capability << std::endl
       << "alignment          : " << key.alignment << std::endl
       << "}";
-  
+
   return out;
 }
-
-/////////////////////////////////////////////////////////////////////////////////////////////////
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -242,7 +242,6 @@ using GemmOperationFunctionalMap = std::unordered_map<
   GemmOperationVectorMap,
   GemmFunctionalKeyHasher
 >;
-/////////////////////////////////////////////////////////////////////////////////////////////////
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 //                          Data Structures for Conv Functional Maps
@@ -289,9 +288,9 @@ struct ConvFunctionalKey {
     layout_C(layout_C),
     element_accumulator(element_accumulator),
     element_compute(element_compute)
-  { } 
+  { }
 
-  inline 
+  inline
   bool operator==(ConvFunctionalKey const &rhs) const {
     return
       (provider == rhs.provider) &&
@@ -306,7 +305,7 @@ struct ConvFunctionalKey {
       (element_compute == rhs.element_compute);
   }
 
-  inline 
+  inline
   bool operator!=(ConvFunctionalKey const &rhs) const {
     return !(*this == rhs);
   }
@@ -326,7 +325,7 @@ std::ostream& operator<< (std::ostream& out, const cutlass::library::ConvFunctio
       << "element_accumulator: " << to_string(key.element_accumulator) << std::endl
       << "element_compute: " << to_string(key.element_compute) << std::endl
       << "}";
-  
+
   return out;
 }
 
@@ -336,14 +335,14 @@ struct ConvFunctionalKeyHasher {
 
   inline
   static size_t rotl(size_t key, int shl) {
-    return (key << shl) | (key >> (sizeof(key)*8 - shl));
+    return (key << shl) | (key >> (sizeof(key)*8u - static_cast<size_t>(shl)));
   }
 
   inline
   size_t operator()(ConvFunctionalKey const &key) const {
     IntHash hash;
 
-    return 
+    return
       rotl(hash(int(key.provider)), 1) ^
       rotl(hash(int(key.conv_kind)), 2) ^
       rotl(hash(int(key.element_A)), 3) ^
@@ -371,11 +370,11 @@ struct ConvPreferenceKey {
 
   ConvPreferenceKey(): compute_capability(), iterator_algorithm() { }
 
-  ConvPreferenceKey(int cc, IteratorAlgorithmID iterator_algorithm): 
+  ConvPreferenceKey(int cc, IteratorAlgorithmID iterator_algorithm):
     compute_capability(cc), iterator_algorithm(iterator_algorithm) { }
 
   bool operator<(ConvPreferenceKey const &rhs) const {
-    return (compute_capability < rhs.compute_capability) || 
+    return (compute_capability < rhs.compute_capability) ||
       ((compute_capability == rhs.compute_capability) && (iterator_algorithm < rhs.iterator_algorithm));
   }
 
@@ -434,9 +433,9 @@ struct ReductionFunctionalKey {
     element_compute(element_compute),
     reduce_math_op(reduce_math_op),
     epilogue_math_op(epilogue_math_op)
-  { } 
+  { }
 
-  inline 
+  inline
   bool operator==(ReductionFunctionalKey const &rhs) const {
     return
       (provider == rhs.provider) &&
@@ -448,7 +447,7 @@ struct ReductionFunctionalKey {
       (epilogue_math_op == rhs.epilogue_math_op);
   }
 
-  inline 
+  inline
   bool operator!=(ReductionFunctionalKey const &rhs) const {
     return !(*this == rhs);
   }
@@ -460,14 +459,14 @@ struct ReductionFunctionalKeyHasher {
 
   inline
   static size_t rotl(size_t key, int shl) {
-    return (key << shl) | (key >> (sizeof(key)*8 - shl));
+    return (key << shl) | (key >> (sizeof(key)*8u - static_cast<size_t>(shl)));
   }
 
   inline
   size_t operator()(ReductionFunctionalKey const &key) const {
     IntHash hash;
 
-    return 
+    return
       rotl(hash(int(key.provider)), 1) ^
       rotl(hash(int(key.element_workspace)), 2) ^
       rotl(hash(int(key.element_accumulator)), 3) ^
@@ -506,19 +505,19 @@ using ReductionOperationFunctionalMap = std::unordered_map<
 class OperationTable {
 public:
 
-  /// Map of all operations of type kGemm 
+  /// Map of all operations of type kGemm
   // provider (kCUTLASS)
   GemmOperationFunctionalMap gemm_operations;
 
-  /// Map of all operations of type kConv2d 
+  /// Map of all operations of type kConv2d
   // provider (kCUTLASS, kReferenceHost, kReferenceDevice)
   ConvOperationFunctionalMap conv2d_operations;
 
-  /// Map of all operations of type kConv3d 
+  /// Map of all operations of type kConv3d
   // provider (kCUTLASS, kReferenceHost, kReferenceDevice)
   ConvOperationFunctionalMap conv3d_operations;
 
-  /// Map of all operations of type kConv2d 
+  /// Map of all operations of type kConv2d
   // provider (kCUTLASS)
   ReductionOperationFunctionalMap reduction_operations;
 
