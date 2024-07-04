@@ -73,7 +73,7 @@ Version: quik 4bit
 
 
 
-# Tensorrt-LLM implementation of MIXQ
+# Tensorrt-LLM implementation of QUIK and MIXQ
 
 MixQ has supported the end-to-end text generation in TRT-LLM and VLLM!
 
