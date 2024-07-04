@@ -6,6 +6,7 @@ import mixlib
 import numpy as np
 from torch.nn import functional as F
 from vllm import _custom_ops as ops
+import scipy
 
 from torch import Tensor
 def two_compl(x: Tensor, bits: int) -> Tensor:
@@ -21,7 +22,7 @@ def unpack_int8_to_int4(weight,ind):
     return mixlib.unpack_int4_to_fp16(weight,ind)
  
 
-
+from EETQ import quant_weights,w8_a16_gemm
 class MixLinear_GEMM(nn.Module):
     def __init__(self, in_features, out_features, bias, dev,  bit, 
             weight_only = False, cache = None, fp_features_num = 256, name = None):
@@ -84,7 +85,8 @@ class MixLinear_GEMM(nn.Module):
 
         self.scale_a = torch.tensor(1.0, device="cuda", dtype=torch.float32)
         self.scale_b = torch.ones((out_features, 1), device="cuda", dtype=torch.float32)
-
+        self.use_old_kernel = True
+        self.cnt_debug = 0
     @classmethod
     def from_linear(cls, linear, bit, weight_only=False, init_only=False,cache=None, 
                     layer_scales= None, dev = 'cuda', name = None):
@@ -92,7 +94,7 @@ class MixLinear_GEMM(nn.Module):
 
         quant_linear = cls(linear.in_features, linear.out_features, linear.bias is not None, 
                            dev, bit=bit, weight_only=weight_only,
-                           cache=cache)
+                           cache=cache, name = name)
    
 
         if init_only is True: 
@@ -177,27 +179,63 @@ class MixLinear_GEMM(nn.Module):
         inputs = x.reshape(-1, x.shape[-1])
         M =  inputs.shape[0]
 
-        # record the outliers in H100, please remove the code when inference
-        if self.name is not None:
-            if "down" in self.name:
-                sigma = inputs.amax()
-                sigma = max(sigma, 9)
-                ind = self.FindOutliers(inputs, sigma / 3 * 2).cpu().numpy()
-            else:
-                ind = self.FindOutliers(inputs).cpu().numpy()
-            if len(ind):
-                name = self.name  
-                f = open("/home/dataset/tmp/tmp/" + name + ".csv", "a+")
-                c = ""
-                for j in ind:
-                    c = c + str(j) + ","
-                f.writelines(c+"\n")
-                f.close()
-        # record the outliers in H100, please remove the code when inference
-        # dev = int(torch.cuda.get_device_properties(0).major)
-        # if dev >= 9:
-        #     unfused = True 
 
+        # record the outliers in H100, please remove the code when inference
+        dev = int(torch.cuda.get_device_properties(0).major)
+        if dev >= 9:
+            unfused = True 
+            # record the outliers in H100, please remove the code when inference
+            
+            #print(self.name)
+            if   1 : 
+                if 1:
+                    # act = torch.max(torch.abs(inputs), dim=0)[0].cpu().numpy()
+
+                    # print(act)
+                    # scipy.io.savemat("/home/dataset/tmp/tmp/" +  str(self.cnt_debug)  + self.name + ".mat", {"data" : act})  
+                    # self.cnt_debug += 1
+                    #exit(0)
+                    if self.name is not None:
+                        
+                        if "down" in self.name:
+                            sigma = 50
+                            if self.cnt_debug <= 50:
+                                sigma = max(self.cnt_debug / 2, 6 )
+                            self.cnt_debug += 1
+                            ind = self.FindOutliers(inputs, sigma).cpu().numpy()
+                        elif "up"  in self.name :
+                            sigma = 6
+                            # if self.cnt_debug <= 50:
+                            #     sigma = 4   
+                            self.cnt_debug += 1
+                            ind = self.FindOutliers(inputs, sigma).cpu().numpy()
+                        elif  "dense"  in self.name :
+                            sigma = 6
+                            if self.cnt_debug <= 50:
+                                sigma = 4.5 
+                            self.cnt_debug += 1
+                            ind = self.FindOutliers(inputs, sigma).cpu().numpy()
+
+                        else:
+                            
+                            ind = self.FindOutliers(inputs).cpu().numpy()
+                        name = self.name
+                        c = ""  
+                        f = open("/home/dataset/tmp/llama13b/" + name + ".csv", "a+")
+                        if len(ind):
+                            
+                            
+                            
+                            for j in ind:
+                                c = c + str(j) + ","
+                        else:
+                            c = "0,"
+                        f.writelines(c+"\n")
+                        f.close()
+                    
+            else:
+                pass
+            
         if self.weight_only is True:
 
             y =  w8_a16_gemm(inputs, self.q_weight, self.scale_col)
@@ -212,9 +250,11 @@ class MixLinear_GEMM(nn.Module):
             if self.ind.shape[0]:
                 cache.activation_outliers = mixlib.ExtractOutliersAndSetToZeros(self.ind, inputs)
                 
-            if not self.arch == 9:
+            if self.use_old_kernel:
                 cache.q_xcache = mixlib.FindRowScale(inputs,cache.x_scale, M, self.in_features ,self.bit)
             else:
+                # for sm90 we use the new kernel
+                # to do !! fuse the following kernel
                 cache.x_scale =   (torch.max(torch.abs(inputs), dim=1)[0].unsqueeze(1) / (
                             127)).to(torch.float16).reshape((M,1))
 
@@ -244,16 +284,16 @@ class MixLinear_GEMM(nn.Module):
                     self.weight_cache =  torch.hstack((self.weight_cache,weight_cache))
                 self.ind = torch.hstack((self.ind,ind))
                 cache.ind = self.ind
-                #cache.q_xcache = mixlib.FindRowScale(inputs,cache.x_scale, M, self.in_features ,self.bit)
+                cache.q_xcache = mixlib.FindRowScale(inputs,cache.x_scale, M, self.in_features ,self.bit)
 
-                if not self.arch == 9:
-                    cache.q_xcache = mixlib.FindRowScale(inputs,cache.x_scale, M, self.in_features ,self.bit)
-                else:
-                    cache.x_scale =   (torch.max(torch.abs(inputs), dim=1)[0].unsqueeze(1) / (
-                                127)).to(torch.float32).reshape((M,1))
+                # if not self.arch == 9:
+                #     cache.q_xcache = mixlib.FindRowScale(inputs,cache.x_scale, M, self.in_features ,self.bit)
+                # else:
+                #     cache.x_scale =   (torch.max(torch.abs(inputs), dim=1)[0].unsqueeze(1) / (
+                #                 127)).to(torch.float32).reshape((M,1))
 
-                    tmp = inputs / cache.x_scale.to(torch.float16)
-                    cache.q_xcache = tmp.round().to(torch.int8)
+                #     tmp = inputs / cache.x_scale.to(torch.float16)
+                #     cache.q_xcache = tmp.round().to(torch.int8)
                 
                 
             self.cnt += 1
@@ -264,46 +304,30 @@ class MixLinear_GEMM(nn.Module):
  
 
         
-
-        if bench_gemm:
-
-            # y = mixlib.gemm(cache.q_xcache,self.q_weight,M, self.out_features, self.in_features)
-            # if self.ind.shape[0]:
-
-     
-            #     outliers_fp16 = F.linear(cache.activation_outliers ,  self.weight_cache)
-            #     y1 = mixlib.dequantizeInt8(y, cache.x_scale, self.scale_col, outliers_fp16, 8, M, self.out_features)
  
-                
-                
+
+
+            # if self.ind.shape[0]:
+            #     # get the same result with bench gemm = false 
+            #     outliers_fp16 = F.linear(cache.activation_outliers ,  self.weight_cache)
+            #     y1 =   ops.cutlass_scaled_mm(
+            #                 cache.q_xcache,
+            #                 self.q_weight.T,
+            #                 out_dtype=torch.float16,
+            #                 scale_a=cache.x_scale,
+            #                 scale_b=self.scale_b,
+            #     )
+            #     y1 += outliers_fp16
+
             # else:
-            #     y1 = mixlib.dequantizeInt8(y, cache.x_scale, self.scale_col, self.cache.zeros, 8, M, self.out_features)
-                
-            
-            # return y1.reshape(cache.shape)
-
-
-            if self.ind.shape[0]:
-                # get the same result with bench gemm = false 
-                outliers_fp16 = F.linear(cache.activation_outliers ,  self.weight_cache)
-                y1 =   ops.cutlass_scaled_mm(
-                            cache.q_xcache,
-                            self.q_weight.T,
-                            out_dtype=torch.float16,
-                            scale_a=cache.x_scale,
-                            scale_b=self.scale_b,
-                )
-                y1 += outliers_fp16
-
-            else:
-                y1 =   ops.cutlass_scaled_mm(
-                            cache.q_xcache,
-                            self.q_weight.T,
-                            out_dtype=torch.float16,
-                            scale_a=cache.x_scale,
-                            scale_b=self.scale_b,
-                )
-            return y1
+            #     y1 =   ops.cutlass_scaled_mm(
+            #                 cache.q_xcache,
+            #                 self.q_weight.T,
+            #                 out_dtype=torch.float16,
+            #                 scale_a=cache.x_scale,
+            #                 scale_b=self.scale_b,
+            #     )
+            # return y1
         
         if self.arch == 9:
             

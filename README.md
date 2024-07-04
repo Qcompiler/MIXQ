@@ -1,5 +1,6 @@
 # MixQ
-Enabling High Performance [ Int8 Int8 + fp16fp16] Mix GEMM with High Accuracy for LLama
+
+MIXQ: Taming Dynamic Outliers in Mixed-Precision Quantization by Online Prediction
 
 
 ## Benchmarking the throughput
@@ -72,6 +73,5 @@ Version: quik 4bit
 
 
 
-# TensorrtLLM implementation
+# Tensorrt-LLM implementation
 
-We have 

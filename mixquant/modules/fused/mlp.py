@@ -11,7 +11,8 @@ class MixFalconMLP(nn.Module):
         self,
         dense_h_to_4h,
         dense_4h_to_h,
-        MixGemmCache = None
+        MixGemmCache = None,
+        name = None
     ):
         super().__init__()
 
@@ -21,7 +22,11 @@ class MixFalconMLP(nn.Module):
         self.dense_4h_to_h = dense_4h_to_h
         self.act = nn.GELU()
         self.MixGemmCache = MixGemmCache   
-
+        self.set_name(name)
+        
+    def set_name(self,name):
+        self.dense_h_to_4h.name = name + ".up"
+        self.dense_4h_to_h.name = name + ".down"
  
     def forward(self, x):
  

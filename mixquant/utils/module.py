@@ -1,5 +1,5 @@
 import torch.nn as nn
-eightbit_only_name = ["o_proj","down_proj"]
+eightbit_only_name = ["o_proj", "down_proj"]
 
 weight_only_map = {
     "GPTJForCausalLM":    [ ], 
@@ -8,7 +8,7 @@ weight_only_map = {
     "BaichuanForCausalLM": [ ],
     "MistralForCausalLM": [ ],
     "FalconForCausalLM" :  [ ],
-    "OPTForCausalLM" :  ["out_proj","fc1","fc2","k_proj","v_proj","q_proj"],
+    "OPTForCausalLM" :  ["out_proj","fc2"],
 }
 
 def get_named_linears(module):

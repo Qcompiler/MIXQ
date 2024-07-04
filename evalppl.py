@@ -202,7 +202,7 @@ if __name__ == "__main__":
         model = AutoAWQForCausalLM.from_quantized(model_path, quant_file, fuse_layers=True, mix = False)
 
 
-    if args.model_type == 'mix':
+    if 'mix' in args.model_type :
         from mixquant.Cache import MixLibCache
         from mixquant import AutoForCausalLM
         cache = MixLibCache(args.n_batch)

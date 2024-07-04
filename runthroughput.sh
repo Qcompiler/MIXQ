@@ -17,7 +17,7 @@ set -x
 quantpath=/home/dataset/quant/quant
 modelpath=/home/dataset
 
-for batch in   32 64 128 256 512
+for batch in   32  
 #for batch in  1  
 
     do
@@ -61,7 +61,7 @@ for batch in   32 64 128 256 512
             #         --batch_size ${batch} --bit ${bit} --dataset_path /home/chenyidong/checkpoint/dataset
             #     done 
             # done
-            data_types=(   "bitsandbytes"   )
+            data_types=(  "fp16"   "bitsandbytes"   )
             for data_type in "${data_types[@]}"
                 do
                 model=${model_type}

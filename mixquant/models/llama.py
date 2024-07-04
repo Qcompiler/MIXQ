@@ -17,8 +17,9 @@ class LlamaMixQForCausalLM(BaseForCausalLM):
         fuser.fuse_rmsnorm(MixGemmCache = cache)
 
         # record the outliers and do not fuse
+        # please remove the code when inf
         dev = int(torch.cuda.get_device_properties(0).major)
-        if dev >= 9:
+        if dev >= 8:
             return 
 
         for layer in model.model.layers:

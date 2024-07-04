@@ -9,7 +9,7 @@ from collections import defaultdict
 from mixquant.utils.utils import clear_memory
 from mixquant.utils.calib_data import get_calib_dataset
 from mixquant.modules.linear import MixLinear_GEMM
-from mixquant.modules.qlinear import MixedQLinear
+
 from mixquant.utils.module import get_named_linears, set_op_by_name, weight_only_map, eightbit_only_name
 
 
@@ -103,6 +103,7 @@ class MixQuantizer:
             linear_layer = linear_layer.cuda().half()
 
             if self.version == 'QUIK':
+                from mixquant.modules.qlinear import MixedQLinear
                 q_linear_module = MixedQLinear
 
             else:

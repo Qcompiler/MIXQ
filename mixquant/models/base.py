@@ -304,14 +304,14 @@ class BaseForCausalLM(nn.Module):
                             weight_only = False 
 
 
-             
+                name_ = str(i) + name
                 if weight_only is True:
 
                     q_linear =  MixLinear_GEMM.from_linear(module,
                                             bit =  bit,
                                             weight_only = weight_only, 
                                             init_only = True,
-                                            cache = MixGemmcache)
+                                            cache = MixGemmcache, name = name_)
 
 
                 else:
@@ -319,7 +319,7 @@ class BaseForCausalLM(nn.Module):
                                             bit =  bit,
                                             weight_only = weight_only, 
                                             init_only = True,
-                                            cache = MixGemmcache)
+                                            cache = MixGemmcache, name = name_)
 
  
                 q_linear.to(next(layer.parameters()).device)
