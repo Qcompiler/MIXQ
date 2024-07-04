@@ -75,7 +75,7 @@ Version: quik 4bit
 
 # Tensorrt-LLM implementation of QUIK and MIXQ
 
-MixQ has supported the end-to-end text generation in TRT-LLM and VLLM!
+We have supported the end-to-end text generation in TRT-LLM and VLLM!
 
 For TRT-LLM, please download the NVIDIA TensorRT docker. [TensorRT docker](https://github.com/NVIDIA/TensorRT-LLM). DO NOT USE your local environment!
 
@@ -181,6 +181,6 @@ When running the ```summarize.py``` of MIXQ (Llama-2-7B in A100, 40GB, PCIE), we
 <img src="figures/textmixq.jpg"  align = "center"  width="600" />
 
 
-For VLLM, to be released.
+
 
 
