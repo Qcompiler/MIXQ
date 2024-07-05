@@ -79,7 +79,11 @@ We have supported the end-to-end text generation in TRT-LLM and VLLM!
 
 For TRT-LLM, please download the NVIDIA TensorRT docker. [TensorRT docker](https://github.com/NVIDIA/TensorRT-LLM). DO NOT USE your local environment!
 
+Please enter the e2eTRTLLM folder:
 
+```
+cd e2eTRTLLM
+```
 
 
 Please Running the docker:
