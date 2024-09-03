@@ -1,9 +1,11 @@
 
-import os
 
+# 本测试使用 mixquant 的量化工具集合实现混和精度量化
+import os
 os.environ["WORLD_SIZE"] = "1"
+
+
 import sys
-sys.path.append('/home/chenyidong/quant/AutoAWQ')
 from mixquant import AutoForCausalLM
 from transformers import AutoTokenizer
 
