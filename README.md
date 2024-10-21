@@ -10,8 +10,9 @@ Please refer to https://github.com/Qcompiler/vllm-mixed-precision for end-to-end
 
 ## Comparision with AWQ
 
-Assuming we have a task that is computing the PPL(perplexity) of Wikitext2. 
-The dataset wikitext has 333088 validation data.
+Assuming we have a task that is to compute the PPL(perplexity) of Wikitext2. 
+The dataset wikitext contains 333088 validation data.
+
 For ```batch size  = 32```, the task is devided into 10409 parts.
 
 AWQ implements the task in 10 minutes with  16.71 it/s.
