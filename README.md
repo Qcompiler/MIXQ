@@ -1,6 +1,29 @@
 # MixQ
 
-MIXQ: Taming Dynamic Outliers in Mixed-Precision Quantization by Online Prediction
+
+
+MixQ: Taming Dynamic Outliers in Mixed-Precision Quantization by Online Prediction
+
+We use  mixed-precision GEMM for enhancing throughput.
+
+Please refer to https://github.com/Qcompiler/vllm-mixed-precision for end-to-end text generation.
+
+## Comparision with AWQ
+
+Assuming we have a task that is computing the PPL(perplexity) of Wikitext2. 
+The dataset wikitext has xx validation data.
+For ```batch size  = 32```, the task is devided into xxx.
+
+AWQ implements the task in seconds with  xx it/s.
+
+MixQ   implements the task in seconds with xx it/s.
+
+
+For ```batch size  = 256```, the task is devided into xxx.
+
+AWQ implements the task in seconds with  xx it/s.
+
+MixQ   implements the task in seconds with xx it/s.
 
 
 ## Benchmarking the throughput
