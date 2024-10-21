@@ -16,11 +16,6 @@ class LlamaMixQForCausalLM(BaseForCausalLM):
         fuser.fuse_mlp(mix, MixGemmCache = cache)
         fuser.fuse_rmsnorm(MixGemmCache = cache)
 
-        # record the outliers and do not fuse
-        # please remove the code when inf
-        dev = int(torch.cuda.get_device_properties(0).major)
-        if dev >= 8:
-            return 
 
         for layer in model.model.layers:
             layer.input_layernorm.next_layer = layer.self_attn.W_pack
@@ -80,8 +75,7 @@ class LlamaFuser:
         for name, module in self.attention_modules:
 
             layer_idx = int(name.split('.')[2])
-  
-            qkv_layer  = self._fuse_qkv(module, MixGemmCache, name)
+            qkv_layer  = self._fuse_qkv(module, MixGemmCache)
             try:
                 num_key_value_heads = module.num_key_value_heads
             except:
@@ -101,7 +95,7 @@ class LlamaFuser:
             )
             set_module_name(self.model, name, attn)
     
-    def _fuse_qkv(self, module: LlamaAttention,cache, name):
+    def _fuse_qkv(self, module: LlamaAttention,cache):
         try:
             q_proj, k_proj, v_proj = module.q_proj, module.k_proj, module.v_proj
         except:
@@ -119,7 +113,7 @@ class LlamaFuser:
                                         next(iter(module.state_dict().values())).device,
                                         bit = self.quant_config['w_bit'],
                                         weight_only=False,
-                                        cache=cache, name = name)
+                                        cache=cache)
 
 
         
@@ -180,5 +174,5 @@ class LlamaFuser:
         for name, module in self.mlp_modules:
             if  mix:
                 assert MixGemmCache is not None
-                mlp = MixLlamaMLP(module.gate_proj, module.down_proj, module.up_proj , MixGemmCache, name)
+                mlp = MixLlamaMLP(module.gate_proj, module.down_proj, module.up_proj , MixGemmCache)
             set_module_name(self.model, name, mlp)

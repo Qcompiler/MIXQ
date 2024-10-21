@@ -11,8 +11,7 @@ class MixFalconMLP(nn.Module):
         self,
         dense_h_to_4h,
         dense_4h_to_h,
-        MixGemmCache = None,
-        name = None
+        MixGemmCache = None
     ):
         super().__init__()
 
@@ -22,15 +21,13 @@ class MixFalconMLP(nn.Module):
         self.dense_4h_to_h = dense_4h_to_h
         self.act = nn.GELU()
         self.MixGemmCache = MixGemmCache   
-        self.set_name(name)
-        
-    def set_name(self,name):
-        self.dense_h_to_4h.name = name + ".up"
-        self.dense_4h_to_h.name = name + ".down"
+
  
     def forward(self, x):
  
         x = self.act(self.dense_h_to_4h(x, self.MixGemmCache))
+        
+        
         x = self.dense_4h_to_h(x, self.MixGemmCache,True)
         
         return x
@@ -44,8 +41,7 @@ class MixLlamaMLP(nn.Module):
         gate_proj,
         down_proj,
         up_proj,
-        MixGemmCache = None,
-        name = None
+        MixGemmCache = None
     ):
         super().__init__()
 
@@ -56,12 +52,7 @@ class MixLlamaMLP(nn.Module):
         self.up_proj_ = up_proj
         self.out_features = down_proj.out_features
         self.MLPCache = MixGemmCache
-        self.set_name(name)
         
-    def set_name(self,name):
-        self.down_proj_.name = name + ".down"
-        self.up_proj_.name = name + ".up"
-        self.gate_proj_.name = name + ".gate"
  
     def forward(self, x):
  

@@ -11,20 +11,26 @@ Please refer to https://github.com/Qcompiler/vllm-mixed-precision for end-to-end
 ## Comparision with AWQ
 
 Assuming we have a task that is computing the PPL(perplexity) of Wikitext2. 
-The dataset wikitext has xx validation data.
-For ```batch size  = 32```, the task is devided into xxx.
+The dataset wikitext has 333088 validation data.
+For ```batch size  = 32```, the task is devided into 10409 parts.
 
-AWQ implements the task in seconds with  xx it/s.
+AWQ implements the task in 10 minutes with  16.71 it/s.
 
-MixQ   implements the task in seconds with xx it/s.
+<img src="figures/awq32.gif">
 
+MixQ   implements the task in 4.50 minutes with 35.02 it/s.
 
-For ```batch size  = 256```, the task is devided into xxx.
+<img src="figures/mixq32.gif">
 
-AWQ implements the task in seconds with  xx it/s.
+For ```batch size  = 512```, the task is devided into 655 parts.
 
-MixQ   implements the task in seconds with xx it/s.
+AWQ implements the task in 127 seconds with  5.2 it/s.
 
+<img src="figures/awq512.gif">
+
+MixQ (W8A8O16) implements the task in 42 seconds with 15.36 it/s.
+
+<img src="figures/mixq512.gif">
 
 ## Benchmarking the throughput
 

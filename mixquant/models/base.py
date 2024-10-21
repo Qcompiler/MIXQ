@@ -12,7 +12,7 @@ from huggingface_hub import snapshot_download
 from transformers.modeling_utils import shard_checkpoint
 from mixquant.modules.linear import   MixLinear_GEMM
 
-#from mixquant.modules.qlinear import   MixedQLinear
+ 
 
 from mixquant.utils.module import get_named_linears, set_op_by_name, weight_only_map,eightbit_only_name
 from transformers import AutoModelForCausalLM, AutoConfig, PreTrainedModel
@@ -41,7 +41,7 @@ class BaseForCausalLM(nn.Module):
     @torch.no_grad()
     def quantize_mix(self, tokenizer=None, quant_config={},
                        calib_data: Union[str, List[str]]="pileval", 
-                       split="train", text_column="text"):
+                       split="train", text_column="text", weight_only_map_str = None):
         self.quant_config = quant_config
         quant_config["version"] = "MIX"
         quant_config["q_group_size"] = 128
@@ -49,9 +49,11 @@ class BaseForCausalLM(nn.Module):
 
         quantizer = MixQuantizer(
             self, self.model, tokenizer, quant_config["w_bit"], quant_config["q_group_size"],
-            quant_config["version"])
+            quant_config["version"], weight_only_map_str = weight_only_map_str)
         quantizer.quantize()
         self.is_quantized = True
+
+
 
 
     @torch.no_grad()
@@ -288,6 +290,7 @@ class BaseForCausalLM(nn.Module):
             
             for name, module in named_linears.items():
 
+                
 
                 weight_only = False
 
@@ -297,21 +300,34 @@ class BaseForCausalLM(nn.Module):
                         break
                 bit =  self.quant_config['w_bit']
 
+                fp_features_num = 128
+
+                        
+
+
                 if bit == 4:
                     for key in eightbit_only_name:
                         if key in  name:
                             bit = 8
                             weight_only = False 
 
+                # if MixGemmcache.eval_ppl == True:
+                #     if "down" in name:
+                #         weight_only = True
 
                 name_ = str(i) + name
+
+                # print(name_)
+                # print(weight_only)
+                # print('----')
                 if weight_only is True:
 
                     q_linear =  MixLinear_GEMM.from_linear(module,
                                             bit =  bit,
                                             weight_only = weight_only, 
                                             init_only = True,
-                                            cache = MixGemmcache, name = name_)
+                                            cache = MixGemmcache, name = name_, fp_features_num = fp_features_num)
+                    
 
 
                 else:
@@ -319,7 +335,7 @@ class BaseForCausalLM(nn.Module):
                                             bit =  bit,
                                             weight_only = weight_only, 
                                             init_only = True,
-                                            cache = MixGemmcache, name = name_)
+                                            cache = MixGemmcache, name = name_, fp_features_num = fp_features_num)
 
  
                 q_linear.to(next(layer.parameters()).device)
@@ -334,7 +350,7 @@ class BaseForCausalLM(nn.Module):
 
     def _load_quik_quantized_modules(self, model, MixGemmcache):
             # Real quantization of weights
-
+            from mixquant.modules.qlinear import   MixedQLinear
             # Get blocks of model
             layers = self.get_model_layers(model)
 
@@ -363,7 +379,7 @@ class BaseForCausalLM(nn.Module):
                             weight_8bit_only = False 
 
 
-                
+
                     if weight_8bit_only is True:
 
                         q_linear =  MixedQLinear.from_linear(module,

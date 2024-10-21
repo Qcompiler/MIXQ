@@ -50,5 +50,5 @@ class FalconFuser:
         for name, module in self.mlp_modules:
             if  mix:
                 assert MixGemmCache is not None
-                mlp = MixFalconMLP(module.dense_h_to_4h, module.dense_4h_to_h, MixGemmCache, name)
+                mlp = MixFalconMLP(module.dense_h_to_4h, module.dense_4h_to_h, MixGemmCache)
             set_module_name(self.model, name, mlp)

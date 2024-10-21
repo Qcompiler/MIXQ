@@ -106,7 +106,6 @@ class QuantAttentionFused(nn.Module):
             )
         self.W_pack = qkv_layer
         self.o_proj = o_proj
-        self.o_proj.name = "model.layers." + str(layer_idx) + ".o_proj"
         self.MixGemmCache = MixGemmCache
         self.rotary_emb = RotaryEmbedding(self.head_dim, max_position_embeddings=self.max_position_embeddings)
 

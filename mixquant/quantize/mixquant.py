@@ -14,7 +14,7 @@ from mixquant.utils.module import get_named_linears, set_op_by_name, weight_only
 
 
 class MixQuantizer:
-    def __init__(self, f16_model, model, tokenizer, w_bit, group_size, version) -> None:
+    def __init__(self, f16_model, model, tokenizer, w_bit, group_size, version, weight_only_map_str = None) -> None:
         self.f16_model = f16_model
         self.model = model
         self.tokenizer = tokenizer
@@ -24,6 +24,7 @@ class MixQuantizer:
         self.w_bit = w_bit
 
         self.modules, self.module_kwargs= self.init_quant()
+        self.weight_only_map = weight_only_map_str
     def init_quant(self, n_samples=128, seqlen=512):
         modules = self.f16_model.get_model_layers(self.model)
 
@@ -208,6 +209,11 @@ class MixQuantizer:
             else:
                 layer_scales = None
 
+            if self.weight_only_map is not None:
+                for i in self.weight_only_map.split(","):
+                    if i in name:
+                        weight_only = True
+                        #print(name + "use weight only forward!!")
             if weight_only is True:
 
 

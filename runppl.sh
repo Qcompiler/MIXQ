@@ -1,6 +1,7 @@
 if [ $2 == a100 ]
     then
     CMD=" srun  -N 1 --pty --gres=gpu:a100:1 -p octave -A public python "
+    CMD="  python "
 fi
 
 if [ $2 == h100 ]
@@ -9,11 +10,11 @@ if [ $2 == h100 ]
 fi
 set -x
 data_types=$3
-quantpath=/home/dataset/quant/quant
-modelpath=/home/dataset
+quantpath=/home/cyd/mixqdata/quant
+modelpath=/home/cyd/mixqdata
 port=8892
 models=(   $4 )
-for batch in    32 
+for batch in    512 
     do
     for seq in   64  
         do
@@ -41,20 +42,21 @@ for batch in    32
 
 
             # models=(    "gpt-j-6b" )
-            # data_types=( "awq"   )
-            # for data_type in "${data_types[@]}"
-            #     do
-            #     for model in "${models[@]}"
-            #         do
-            #         echo ${model}
-            #         CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:8892 https_proxy=127.0.0.1:8892  \
-            #         python evalppl.py --fp_features_num 128 --model_type ${data_type} --model_path  \
-            #         /data/chenyidong/checkpoint/awqquant/${model} \
-            #         --quant_file /data/chenyidong/checkpoint/awqquant/${model} \
-            #         --n_ctx $batch --n_batch $batch  --eval_accuracy True
-            #     done
-            # done
-            
+            if [ ${data_types} == awq ]
+                then
+                    for data_type in "${data_types[@]}"
+                        do
+                        for model in "${models[@]}"
+                            do
+                            echo ${model}
+                            CUDA_VISIBLE_DEVICES=$1   http_proxy=127.0.0.1:8892 https_proxy=127.0.0.1:8892  \
+                            python evalppl.py  --model_type ${data_type} --model_path  \
+                            ${modelpath}/${model} \
+                            --quant_file ${modelpath}/${model}-AWQ \
+                            --n_ctx $batch --n_batch $batch  --eval_accuracy True
+                        done
+                    done
+            fi
             if [ ${data_types} == mix8 ]
                 then
                     bit=8
@@ -68,7 +70,7 @@ for batch in    32
                             ${CMD} evalppl.py --model_type ${data_type} --model_path  \
                             ${quantpath}${bit}/${model} \
                             --quant_file  ${quantpath}${bit}/${model} \
-                            --n_ctx $batch --n_batch $batch  --eval_accuracy True --dataset_path /home/dataset/quant/checkpoint/dataset
+                            --n_ctx $batch --n_batch $batch  --eval_accuracy True 
                         done
                     done
             fi

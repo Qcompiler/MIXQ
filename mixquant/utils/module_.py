@@ -1,12 +1,12 @@
 import torch.nn as nn
-eightbit_only_name = ["down_proj",  "o_proj",  "fc_out"]
+eightbit_only_name = ["down_proj",  "fc_out"]
 
 weight_only_map = {
     "GPTJForCausalLM":    ["fc_out"], 
     "LlamaForCausalLM":   [],
-    "AquilaForCausalLM":  [],
-    "BaichuanForCausalLM": [],
-    "MistralForCausalLM": [],
+    "AquilaForCausalLM":  ["down_proj"],
+    "BaichuanForCausalLM": ["down_proj"],
+    "MistralForCausalLM": ["down_proj"],
     "FalconForCausalLM" :  [],
     
 }

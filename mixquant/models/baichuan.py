@@ -13,8 +13,13 @@ class BaichuanMixQForCausalLM(BaseForCausalLM):
         
         fuser.fuse_attention(MixGemmCache = cache)
         
-        fuser.fuse_rmsnorm()
         fuser.fuse_mlp(mix, MixGemmCache = cache)
+        fuser.fuse_rmsnorm(MixGemmCache = cache)
+
+
+        for layer in model.model.layers:
+            layer.input_layernorm.next_layer = layer.self_attn.W_pack
+            layer.post_attention_layernorm.next_layer = layer.mlp.up_proj_ 
 
     @staticmethod
     def get_model_layers(model: LlamaForCausalLM):
@@ -98,6 +103,31 @@ class LlamaFuser:
                 )
             set_module_name(self.model, name, attn)
     
+    def fuse_attention(self, MixGemmCache):
+        
+        for name, module in self.attention_modules:
+
+            layer_idx = int(name.split('.')[2])
+            qkv_layer  = self._fuse_qkv(module, MixGemmCache)
+            try:
+                num_key_value_heads = module.num_key_value_heads
+            except:
+                # 为了处理百川的模型
+                print("do not find the attr module.num_key_value_heads")
+                num_key_value_heads = 32
+            attn = QuantAttentionFused(
+                module.hidden_size,
+                module.num_heads,
+                num_key_value_heads,
+                qkv_layer, 
+                module.o_proj,
+                next(iter(qkv_layer.state_dict().values())).device,
+                self.model.config.max_new_tokens,
+                MixGemmCache = MixGemmCache,
+                layer_idx = layer_idx
+            )
+            set_module_name(self.model, name, attn)
+    
     def _fuse_qkv(self, module: LlamaAttention,cache):
         try:
             q_proj, k_proj, v_proj = module.q_proj, module.k_proj, module.v_proj
@@ -114,20 +144,42 @@ class LlamaFuser:
             qkv_layer = MixLinear_GEMM(q_proj.in_features,q_proj.out_features + k_proj.out_features + v_proj.out_features,
                                         q_proj.bias is not None,
                                         next(iter(module.state_dict().values())).device,
-                                        False,
-                                        cache)
+                                        bit = self.quant_config['w_bit'],
+                                        weight_only=False,
+                                        cache=cache)
 
 
         
         if isinstance(qkv_layer, MixLinear_GEMM):
             shapew = qkv_layer.q_weight.shape
-            qkv_layer.q_weight = torch.cat([q_proj.q_weight, k_proj.q_weight, v_proj.q_weight], dim=0)
-            qkv_layer.scale_col = torch.cat([q_proj.scale_col, k_proj.scale_col, v_proj.scale_col], dim=1)
+            
+            if qkv_layer.weight_only:
+                qkv_layer.q_weight = torch.cat([q_proj.q_weight, k_proj.q_weight, v_proj.q_weight], dim=1)
+                qkv_layer.scale_col = torch.cat([q_proj.scale_col, k_proj.scale_col, v_proj.scale_col], dim=0)
+                
+            else:
+                qkv_layer.q_weight = torch.cat([q_proj.q_weight, k_proj.q_weight, v_proj.q_weight], dim=0)
+                qkv_layer.scale_col = torch.cat([q_proj.scale_col, k_proj.scale_col, v_proj.scale_col], dim=1)
+                assert shapew[0] == qkv_layer.q_weight.shape[0]
+                assert shapew[1] == qkv_layer.q_weight.shape[1]
+                assert shapew[0] == qkv_layer.scale_col.shape[1]
+                assert 1 == qkv_layer.scale_col.shape[0]
+            if self.quant_config['w_bit'] == 4:
 
-            assert shapew[0] == qkv_layer.q_weight.shape[0]
-            assert shapew[1] == qkv_layer.q_weight.shape[1]
-            assert shapew[0] == qkv_layer.scale_col.shape[1]
-            assert 1 == qkv_layer.scale_col.shape[0]
+
+                
+                qkv_layer.weight_cache.copy_(torch.cat([q_proj.weight_cache, 
+                                                        k_proj.weight_cache, 
+                                                        v_proj.weight_cache], dim=0))
+      
+ 
+
+                qkv_layer.ind.copy_(q_proj.ind)
+
+
+  
+
+
 
             if q_proj.bias is not None:
                 raise NotImplementedError
@@ -146,9 +198,9 @@ class LlamaFuser:
         torch.cuda.empty_cache()
         return qkv_layer
 
-    def fuse_rmsnorm(self):
+    def fuse_rmsnorm(self, MixGemmCache):
         for name, module in self.rmsnorm_modules:
-            norm = FasterTransformerRMSNorm(module.weight, module.variance_epsilon)
+            norm = FasterTransformerRMSNorm(module.weight, module.variance_epsilon, MixGemmCache)
             set_module_name(self.model, name, norm)
 
     def fuse_mlp(self,mix, MixGemmCache = None):
