@@ -1,10 +1,23 @@
-export PYTHONPATH=$PYTHONPATH:/home/cyd/MIXQ
+export PYTHONPATH=$PYTHONPATH:/home/chenyidong/MIXQ
 
-if [ $1 == a100 ]
+if [ $2 == a100 ]
+    then
+    CMD=" srun  -N 1 --pty --gres=gpu:a100:1 -p octave -A public python "
+    #CMD="  python "
+fi
+if [ $2 == direct ]
     then
     CMD="  python "
-    else
+    #CMD="  python "
+fi
+
+if [ $2 == h100 ]
+    then
     CMD="srun  -p twills -A h100 --gres=gpu:h100:1 --export=ALL python"
+fi
+if [ $2 == 4090 ]
+    then
+    CMD=" srun -N 1 --gres=gpu:4090:1 --pty  python"
 fi
 #CMD=" python" 
  
@@ -21,8 +34,8 @@ models=(  "Baichuan2-7b"  "Baichuan2-13b" "Aquila2-7b" "Llama-2-7b"  "Mistral-7b
 models=(  "llama-2-hf"    )
 models=(  "falcon-40b"   )
 models=(   "Llama-2-7b"  )
-quantpath=/home/cyd/mixqdata/quant
-modelpath=/home/cyd/mixqdata
+quantpath=/home/dataset/quant/quant
+modelpath=/home/dataset
 
 for bit in   8 
   do 
