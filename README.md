@@ -15,21 +15,21 @@ The dataset wikitext contains 333088 validation data.
 
 For ```batch size  = 32```, the task is devided into 10409 parts.
 
-AWQ finised the task in 10 minutes with  16.71 it/s.
+AWQ finished the task in 10 minutes with  16.71 it/s.
 
 <img src="figures/awq32.gif">
 
-MixQ (W8A8O16)   finised the task in 4.50 minutes with 35.02 it/s.
+MixQ (W8A8O16)   finished the task in 4.50 minutes with 35.02 it/s.
 
 <img src="figures/mixq32.gif">
 
 For ```batch size  = 512```, the task is devided into 655 parts.
 
-AWQ finised the task in 127 seconds with  5.2 it/s.
+AWQ finished the task in 127 seconds with  5.2 it/s.
 
 <img src="figures/awq512.gif">
 
-MixQ (W8A8O16) finised the task in 30 seconds with 21.34 it/s.
+MixQ (W8A8O16) finished the task in 30 seconds with 21.34 it/s.
 
 <img src="figures/mixq512.gif">
 
