@@ -124,21 +124,34 @@ We have supported the end-to-end text generation in TRT-LLM and VLLM!
 
 For TRT-LLM, please download the NVIDIA TensorRT docker. [TensorRT docker](https://github.com/NVIDIA/TensorRT-LLM). DO NOT USE your local environment!
 
-Please enter the e2eTRTLLM folder:
+Please enter the e2eTRTLLM folder https://github.com/Qcompiler/MixQ_Tensorrt_LLM
 
 ```
-cd e2eTRTLLM
+git clone https://github.com/Qcompiler/MixQ_Tensorrt_LLM.git
+docker pull registry.cn-hangzhou.aliyuncs.com/dongdongchen/dongdong:v1
 ```
+
 
 
 Please Running the docker:
 
 ```
-docker run --rm -it   --ipc=host  -v /home/code/:/code/tensorrt_llm  \
-             -v /home/dataset/checkpoint:/dataset  -v /home/checkpoint:/code/checkpoint \
-            --ulimit memlock=-1      --ulimit    stack=67108864             \
-            --gpus=all    --env "CCACHE_DIR=/code/tensorrt_llm/cpp/.ccache"            \
-             --env "CCACHE_BASEDIR=/code/tensorrt_llm"        
+export name=myname
+bash -c " nvidia-smi; docker run --rm -it --ipc=host -p 6789:22 \
+-v /home/${name}/lianxiang/lianxiangTRT/:/code/tensorrt_llm   \
+-v  /mnt/octave/data/${name}/checkpoint:/dataset    \
+-v /home/${name}/checkpoint:/code/checkpoint \
+-v /mnt/octave/data/${name}/lianxiang/checkpoint:/octave/checkpoint \
+               --ulimit memlock=-1 --ulimit    stack=67108864             \
+                           --gpus=all       \
+                       --env 'CCACHE_DIR=/code/tensorrt_llm/cpp/.ccache'            \
+                            --env 'CCACHE_BASEDIR=/code/tensorrt_llm'              \
+                                                    --workdir /app/tensorrt_llm     \
+                                                            --hostname hpc-release \
+                  --name tensorrt_llm-release-zhanghy                             \
+                                                           --tmpfs /tmp:exec      \
+              registry.cn-hangzhou.aliyuncs.com/dongdongchen/dongdong:v1     "
+ 
 ```
 
 
