@@ -245,4 +245,37 @@ When running the ```summarize.py``` of MIXQ (Llama-2-7B in A100, 40GB, PCIE), we
 
 
 
+## Mixed-precision Inference In VLLM
 
+Please follow the https://github.com/Qcompiler/vllm-mixed-precision for mixed-precision inference.
+
+Please install the vllm by
+```
+pip install vllm==0.6.2
+```
+
+
+Please install the mixed-precision source code by
+```
+git clone git@github.com:Qcompiler/vllm-mixed-precision.git
+```
+
+And copy the ".so" from the vllm project
+
+```
+cp -r $PYTHON_PATH/lib/python3.11/site-packages/vllm/*.so  vllm-mixed-precision/vllm/
+```
+
+Delete the vllm==0.6.2
+```
+pip uninstall vllm
+```
+
+
+
+## Runing 8-bit mixed-preiciosn infernce in vllm
+
+```
+export PYTHONPATH=$( pwd )
+python test8bit.py --quant 8
+```
