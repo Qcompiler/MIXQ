@@ -33,6 +33,21 @@ MixQ (W8A8O16) finished the task in 30 seconds with 21.34 it/s.
 
 <img src="figures/mixq512.gif">
 
+
+## Setup
+
+Please download the mixlib kernel from https://github.com/Qcompiler/QComplier:
+
+```
+git clone git@github.com:Qcompiler/QComplier.git
+cd EETQ 
+python setup.py install
+```
+```
+cd quantkernel
+python setup.py install 
+```
+
 ## Benchmarking the throughput
 
 
