@@ -33,17 +33,16 @@ set -x
 models=(  "Baichuan2-7b"  "Baichuan2-13b" "Aquila2-7b" "Llama-2-7b"  "Mistral-7b" )
 models=(  "llama-2-hf"    )
 models=(  "falcon-40b"   )
-models=(   "Llama-2-7b"  )
-quantpath=/home/dataset/quant/quant
-modelpath=/home/dataset
+models=(   "Llama-2-7b"  "falcon-7b" "vicuna-7b" "chatglm2-6b" )
+quantpath=/home/chenyidong/data/mixqdata/quant
+modelpath=/home/chenyidong/data/mixqdata
 
 for bit in   8 
   do 
     for model in "${models[@]}"
             do
             echo ${model}
-            ${CMD} \
-              examples/basic_quant_mix.py  \
+            ${CMD}   examples/basic_quant_mix.py  \
             --model_path ${modelpath}/${model} \
             --quant_file ${quantpath}${bit}/${model} --w_bit ${bit}
     done

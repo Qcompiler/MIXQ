@@ -45,6 +45,7 @@ Example usage:
 
 import argparse
 import os,sys
+ 
 import random
 
 import numpy as np
@@ -55,70 +56,12 @@ from tqdm import tqdm
 from transformers import (AutoModel, AutoModelForCausalLM,
                           AutoModelForSeq2SeqLM, AutoTokenizer,
                           GenerationConfig)
+from utils import  load_tokenizer, read_model_name
+
+
+
  
 
-
-
-DTYPE_STR_MAPPING = {
-    "fp32": torch.float32,
-    "fp16": torch.float16,
-    "bf16": torch.bfloat16,
-    "float32": torch.float32,
-    "float16": torch.float16,
-    "bfloat16": torch.bfloat16,
-}
-RAND_SEED = 1234
-
-
-
-from typing import Optional
-def load_tokenizer(tokenizer_dir: Optional[str] = None,
-                   vocab_file: Optional[str] = None,
-                   model_name: str = 'GPTForCausalLM',
-                   model_version: Optional[str] = None,
-                   tokenizer_type: Optional[str] = None):
-    if vocab_file is None:
-        use_fast = True
-        if tokenizer_type is not None and tokenizer_type == "llama":
-            use_fast = False
-        # Should set both padding_side and truncation_side to be 'left'
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir,
-                                                  legacy=False,
-                                                  padding_side='left',
-                                                  truncation_side='left',
-                                                  trust_remote_code=True,
-                                                  tokenizer_type=tokenizer_type,
-                                                  use_fast=use_fast)
-    elif model_name == 'GemmaForCausalLM':
-        from transformers import GemmaTokenizer
-
-        # Initialize tokenizer from vocab file.
-        tokenizer = GemmaTokenizer(vocab_file=vocab_file,
-                                   padding_side='left',
-                                   truncation_side='left',
-                                   legacy=False)
-    else:
-        # For gpt-next, directly load from tokenizer.model
-        tokenizer = T5Tokenizer(vocab_file=vocab_file,
-                                padding_side='left',
-                                truncation_side='left',
-                                legacy=False)
-
-    if model_name == 'QWenForCausalLM' and model_version == 'qwen':
-        with open(Path(tokenizer_dir) / "generation_config.json") as f:
-            gen_config = json.load(f)
-        pad_id = gen_config['pad_token_id']
-        end_id = gen_config['eos_token_id']
-    elif model_name == 'ChatGLMForCausalLM' and model_version == 'glm':
-        pad_id = tokenizer.pad_token_id
-        end_id = tokenizer.eop_token_id
-    else:
-        if tokenizer.pad_token_id is None:
-            tokenizer.pad_token_id = tokenizer.eos_token_id
-        pad_id = tokenizer.pad_token_id
-        end_id = tokenizer.eos_token_id
-
-    return tokenizer, pad_id, end_id
 
 def get_choices():
     return ["A", "B", "C", "D"]
@@ -240,12 +183,7 @@ def gen_prompt(train_df, subject, k=-1):
 def evaluate(args, subject, pipeline, dev_df, test_df):
     cors = []
     all_probs = []
-    # print("test tokens")
-    # print(test_df.shape[0])
-    # exit(0)
     for i in range(test_df.shape[0]):
-
-
         if i >= args.max_ite:
             break
         # get prompt and make sure it fits
@@ -582,8 +520,8 @@ def main():
     args = parse_args()
     if args.tokenizer_dir is None:
         args.tokenizer_dir = args.hf_model_dir
-    random.seed(RAND_SEED)
-    np.random.seed(RAND_SEED)
+    random.seed(0)
+    np.random.seed(0)
  
 
     os.path.dirname(os.path.abspath(__file__))
@@ -601,17 +539,18 @@ def main():
         for subcat in subcat_lists
     }
     cat_cors = {cat: [] for cat in get_categories()}
-
-    model_name, model_version = read_model_name_(args.hf_model_dir)
-    
-    
+    if args.engine_dir is not None:
+        model_name, model_version = read_model_name(args.engine_dir)
+    else:
+        model_name, model_version = read_model_name_(args.hf_model_dir)
     tokenizer, pad_id, end_id = load_tokenizer(
         tokenizer_dir=args.tokenizer_dir,
-        vocab_file=None,
+        vocab_file=args.vocab_file,
         model_name=model_name,
         model_version=model_version,
     )
- 
+
+
 
 
 
@@ -622,21 +561,26 @@ def main():
 
     
     if model_type == 'mix8' or model_type == 'mix4':
-         
-        sys.path.append("/home/chenyidong/SC3/MixQ/")
-        from mixquant.Cache import MixLibCache
-        cache = MixLibCache(bit=int(model_type[-1]))
+        # from mixquant.Cache import MixLibCache
+        # cache = MixLibCache(bit=int(model_type[-1]))
 
-        from mixquant import AutoForCausalLM
-        model = AutoForCausalLM.from_quantized(
-            model_path, quant_file, fuse_layers=True,
-            safetensors=safetensors,
-            mix = True,
-            cache = cache
-        )
+        # from mixquant import AutoForCausalLM
+        # model = AutoForCausalLM.from_quantized(
+        #     model_path, quant_file, fuse_layers=True,
+        #     safetensors=safetensors,
+        #     mix = True,
+        #     cache = cache
+        # )
 
 
-    
+        
+        runner_cls = ModelRunner if (args.debug_mode
+                                     or not PYTHON_BINDINGS) else ModelRunnerCpp
+
+        runtime_rank = tensorrt_llm.mpi_rank()                             
+        model = runner_cls.from_dir(args.engine_dir,
+                                    rank=runtime_rank,
+                                    debug_mode=args.debug_mode)
 
     if model_type == 'awq':
         import warnings
@@ -673,11 +617,10 @@ def main():
         model = auto_model_cls.from_pretrained(
             args.hf_model_dir,
             trust_remote_code=True,
-            torch_dtype=DTYPE_STR_MAPPING[args.hf_data_type],
-            device_map="cpu" if args.hf_device_map_auto else None,
+            torch_dtype=torch.float16,
+            device_map="auto" if args.hf_device_map_auto else None,
         )
-        model = model.cuda()
-
+        model.cuda()
 
         
     if model_name == "qwen":
@@ -694,24 +637,8 @@ def main():
         test_df = pd.read_csv(os.path.join(args.data_dir, "test",
                                            subject + "_test.csv"),
                               header=None)
-        print("current subject is")
-        print(subject)
-        tmpdir="/home/dataset/tmp"
-        try:
-            os.system("rm -r " + tmpdir + "/tmp")
-        except:
-            pass
-        try:
-            os.system("rm -r " + os.path.join(tmpdir,subject))
-        except:
-            pass
-        os.mkdir(tmpdir + "/tmp")
-        os.mkdir(os.path.join(tmpdir,subject))
 
         cors, acc, probs = evaluate(args, subject, pipeline, dev_df, test_df)
-        os.system("mv /home/dataset/tmp/tmp/*   " + os.path.join("/home/dataset/tmp",subject) +"/")
-
-        exit(0)
         subcats = get_subcategories()[subject]
         for subcat in subcats:
             subcat_cors[subcat].append(cors)
